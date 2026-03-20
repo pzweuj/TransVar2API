@@ -117,14 +117,14 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
         }
 
     # 根据 source 和 refversion 确定 transvar 使用的 refversion 名称
-    # 启动脚本中配置的是: hg38_refseq, hg19_refseq (UCSC), hg38_ncbi_refseq, hg19_ncbi_refseq (NCBI)
+    # 统一命名风格: hg38_ucsc, hg19_ucsc, hg38_ncbi, hg19_ncbi
     if source == "ncbi_refseq":
         db_type = "--refseq"
         if refversion == "hg38":
-            transvar_refversion = "hg38_ncbi_refseq"
+            transvar_refversion = "hg38_ncbi"
             db_path = REFSEQ_HG38
         elif refversion == "hg19":
-            transvar_refversion = "hg19_ncbi_refseq"
+            transvar_refversion = "hg19_ncbi"
             db_path = REFSEQ_HG19
         else:
             logger.error(f"无效的版本: {refversion}")
@@ -132,10 +132,10 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
     else:  # ucsc
         db_type = "--ucsc"
         if refversion == "hg38":
-            transvar_refversion = "hg38_refseq"
+            transvar_refversion = "hg38_ucsc"
             db_path = UCSC_HG38
         elif refversion == "hg19":
-            transvar_refversion = "hg19_refseq"
+            transvar_refversion = "hg19_ucsc"
             db_path = UCSC_HG19
         else:
             logger.error(f"无效的版本: {refversion}")

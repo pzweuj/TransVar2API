@@ -17,9 +17,9 @@ if [ -f ncbiRefSeq.txt.gz.transvardb.gene_idx ] && [ ! -f ncbiRefSeq.txt.gz.gene
     ln -sf ncbiRefSeq.txt.gz.transvardb.gene_idx ncbiRefSeq.txt.gz.gene_idx
     ln -sf ncbiRefSeq.txt.gz.transvardb.trxn_idx ncbiRefSeq.txt.gz.trxn_idx
 fi
-echo "  - Configuring hg38_refseq..."
-transvar config -k reference -v /data/transvar_db/ucsc_hg38/hg38.fa --refversion hg38_refseq
-transvar config -k ucsc -v /data/transvar_db/ucsc_hg38/ncbiRefSeq.txt.gz --refversion hg38_refseq
+echo "  - Configuring hg38_ucsc..."
+transvar config -k reference -v /data/transvar_db/ucsc_hg38/hg38.fa --refversion hg38_ucsc
+transvar config -k ucsc -v /data/transvar_db/ucsc_hg38/ncbiRefSeq.txt.gz --refversion hg38_ucsc
 
 # ========== UCSC hg19 ==========
 echo "[2/6] Setting up UCSC hg19..."
@@ -30,9 +30,9 @@ if [ -f ncbiRefSeq.txt.gz.transvardb.gene_idx ] && [ ! -f ncbiRefSeq.txt.gz.gene
     ln -sf ncbiRefSeq.txt.gz.transvardb.gene_idx ncbiRefSeq.txt.gz.gene_idx
     ln -sf ncbiRefSeq.txt.gz.transvardb.trxn_idx ncbiRefSeq.txt.gz.trxn_idx
 fi
-echo "  - Configuring hg19_refseq..."
-transvar config -k reference -v /data/transvar_db/ucsc_hg19/hg19.fa --refversion hg19_refseq
-transvar config -k ucsc -v /data/transvar_db/ucsc_hg19/ncbiRefSeq.txt.gz --refversion hg19_refseq
+echo "  - Configuring hg19_ucsc..."
+transvar config -k reference -v /data/transvar_db/ucsc_hg19/hg19.fa --refversion hg19_ucsc
+transvar config -k ucsc -v /data/transvar_db/ucsc_hg19/ncbiRefSeq.txt.gz --refversion hg19_ucsc
 
 # ========== NCBI RefSeq hg38 ==========
 echo "[3/6] Setting up NCBI RefSeq hg38..."
@@ -43,9 +43,9 @@ if [ -f hg38_refseq.gff.gz.transvardb.gene_idx ] && [ ! -f hg38_refseq.gff.gz.ge
     ln -sf hg38_refseq.gff.gz.transvardb.gene_idx hg38_refseq.gff.gz.gene_idx
     ln -sf hg38_refseq.gff.gz.transvardb.trxn_idx hg38_refseq.gff.gz.trxn_idx
 fi
-echo "  - Configuring ncbi_refseq_hg38..."
-transvar config -k reference -v /data/transvar_db/ncbi_refseq_hg38/hg38.fa --refversion hg38_ncbi_refseq
-transvar config -k refseq -v /data/transvar_db/ncbi_refseq_hg38/hg38_refseq.gff.gz --refversion hg38_ncbi_refseq
+echo "  - Configuring hg38_ncbi..."
+transvar config -k reference -v /data/transvar_db/ncbi_refseq_hg38/hg38.fa --refversion hg38_ncbi
+transvar config -k refseq -v /data/transvar_db/ncbi_refseq_hg38/hg38_refseq.gff.gz --refversion hg38_ncbi
 
 # ========== NCBI RefSeq hg19 ==========
 echo "[4/6] Setting up NCBI RefSeq hg19..."
@@ -56,9 +56,9 @@ if [ -f hg19_refseq.gff.gz.transvardb.gene_idx ] && [ ! -f hg19_refseq.gff.gz.ge
     ln -sf hg19_refseq.gff.gz.transvardb.gene_idx hg19_refseq.gff.gz.gene_idx
     ln -sf hg19_refseq.gff.gz.transvardb.trxn_idx hg19_refseq.gff.gz.trxn_idx
 fi
-echo "  - Configuring ncbi_refseq_hg19..."
-transvar config -k reference -v /data/transvar_db/ncbi_refseq_hg19/hg19.fa --refversion hg19_ncbi_refseq
-transvar config -k refseq -v /data/transvar_db/ncbi_refseq_hg19/hg19_refseq.gff.gz --refversion hg19_ncbi_refseq
+echo "  - Configuring hg19_ncbi..."
+transvar config -k reference -v /data/transvar_db/ncbi_refseq_hg19/hg19.fa --refversion hg19_ncbi
+transvar config -k refseq -v /data/transvar_db/ncbi_refseq_hg19/hg19_refseq.gff.gz --refversion hg19_ncbi
 
 # Verify setup
 echo "[5/6] Checking index files..."
