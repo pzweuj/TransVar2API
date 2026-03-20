@@ -916,13 +916,17 @@ async def annotate(request: AnnotationRequest):
     - **mode**: 注释模式 (panno/canno/ganno/codonsearch)
     - **sources**: 数据库来源列表 (ucsc, ncbi_refseq)
     """
+    logger.info(f"收到注释请求: variant={request.variant}, refversion={request.refversion}, mode={request.mode}, sources={request.sources}")
+
     sources = request.sources if request.sources else ["ucsc"]
     results = []
     all_success = True
     merged_result = ""
 
     for source in sources:
+        logger.info(f"处理数据源: {source}")
         result = run_transvar(request.variant, request.mode, request.refversion, source)
+        logger.info(f"数据源 {source} 处理完成: success={result.get('success', False)}")
         results.append({
             "source": source,
             "success": result.get("success", False),
@@ -935,6 +939,7 @@ async def annotate(request: AnnotationRequest):
         if result.get("result"):
             merged_result += f"[{source}]\n{result['result']}\n\n"
 
+    logger.info(f"注释请求完成: all_success={all_success}")
     return AnnotationResponse(
         success=all_success or len([r for r in results if r["success"]]) > 0,
         input=request.variant,
