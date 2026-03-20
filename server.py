@@ -8,12 +8,20 @@ import os
 import subprocess
 import json
 import re
+import logging
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 import uvicorn
+
+# 配置日志
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 app = FastAPI(
     title="TransVar API",
@@ -88,9 +96,12 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
     Returns:
         包含执行结果的字典
     """
+    logger.info(f"开始处理: variant={variant}, mode={mode}, refversion={refversion}, source={source}")
+
     # 验证模式
     valid_modes = ["panno", "canno", "ganno", "codonsearch"]
     if mode not in valid_modes:
+        logger.error(f"无效的模式: {mode}")
         return {
             "success": False,
             "error": f"无效的模式: {mode}，支持的模式: {', '.join(valid_modes)}"
@@ -99,6 +110,7 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
     # 验证数据库来源
     valid_sources = ["ucsc", "ncbi_refseq"]
     if source not in valid_sources:
+        logger.error(f"无效的数据库来源: {source}")
         return {
             "success": False,
             "error": f"无效的数据库来源: {source}，支持的来源: {', '.join(valid_sources)}"
@@ -114,6 +126,7 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             db_path = REFSEQ_HG19
             refseq_file = f"{db_path}/hg19_refseq.gff.gz"
         else:
+            logger.error(f"无效的版本: {refversion}")
             return {"success": False, "error": f"无效的版本: {refversion}"}
     else:  # ucsc
         db_type = "--ucsc"
@@ -124,6 +137,7 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             db_path = UCSC_HG19
             refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
         else:
+            logger.error(f"无效的版本: {refversion}")
             return {"success": False, "error": f"无效的版本: {refversion}"}
 
     # 检查数据库是否存在
@@ -131,16 +145,25 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
 
     # transvar 会自动查找 .transvardb、.gene_idx、.trxn_idx 索引文件
     if not os.path.exists(refseq_file):
+        logger.error(f"数据库文件不存在: {refseq_file}")
         return {
             "success": False,
             "error": f"数据库文件不存在: {refseq_file}，请先运行构建脚本"
         }
 
     if not os.path.exists(reference_file):
+        logger.error(f"参考基因组文件不存在: {reference_file}")
         return {
             "success": False,
             "error": f"参考基因组文件不存在: {reference_file}"
         }
+
+    # 检查索引文件是否存在
+    transvardb_file = f"{refseq_file}.transvardb"
+    if not os.path.exists(transvardb_file):
+        logger.warning(f"索引文件不存在: {transvardb_file}")
+
+    logger.info(f"数据库路径: {db_path}, 参考基因组: {reference_file}")
 
     # 构建 TransVar 命令
     cmd = [
@@ -150,6 +173,7 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
         "--reference", reference_file,
         "--refversion", refversion
     ]
+    logger.info(f"执行命令: {' '.join(cmd)}")
 
     try:
         env = {
@@ -157,19 +181,25 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             "TRANSVAR_DB_PATH": DB_PATH,
             "HOME": os.path.expanduser("~")
         }
+        logger.info(f"开始执行 transvar 命令，超时设置为 120 秒")
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=120,  # 增加超时时间到 120 秒
             env=env,
             cwd="/app"
         )
 
         output = result.stdout
         error = result.stderr
+        logger.info(f"命令返回码: {result.returncode}")
+        logger.info(f"标准输出长度: {len(output)} 字符")
+        if error:
+            logger.warning(f"标准错误: {error[:500]}")  # 只记录前500字符
 
         if result.returncode == 0 and output:
+            logger.info(f"执行成功")
             return {
                 "success": True,
                 "source": source,
@@ -177,6 +207,7 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
                 "raw_output": output
             }
         else:
+            logger.error(f"执行失败: returncode={result.returncode}")
             return {
                 "success": False,
                 "source": source,
@@ -185,12 +216,14 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             }
 
     except subprocess.TimeoutExpired:
+        logger.error(f"执行超时: variant={variant}")
         return {
             "success": False,
             "source": source,
-            "error": "执行超时，请检查变异格式是否正确"
+            "error": "执行超时（120秒），请检查变异格式是否正确或稍后重试"
         }
     except Exception as e:
+        logger.exception(f"执行异常: {str(e)}")
         return {
             "success": False,
             "source": source,
@@ -587,6 +620,7 @@ async def home():
                     <p>点击"查看数据库信息"按钮获取详细信息</p>
                 </div>
                 <button class="btn" onclick="getDbInfo()">查看数据库信息</button>
+                <button class="btn" style="margin-left:10px;background:linear-gradient(135deg, #f44336 0%, #c62828 100%);" onclick="getDebugInfo()">调试信息</button>
             </div>
 
             <div id="result" class="result"></div>
@@ -654,12 +688,23 @@ async def home():
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
 
+            // 添加请求超时控制
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 150000); // 150秒超时
+
             try {
                 const response = await fetch('/api/annotate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({variant, refversion, mode, sources})
+                    body: JSON.stringify({variant, refversion, mode, sources}),
+                    signal: controller.signal
                 });
+                clearTimeout(timeoutId);
+
+                if (!response.ok) {
+                    throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+                }
+
                 const data = await response.json();
 
                 if (data.success && data.results) {
@@ -678,7 +723,12 @@ async def home():
                     showResult(false, data.error || '注释失败');
                 }
             } catch (e) {
-                showResult(false, '请求失败: ' + e.message);
+                clearTimeout(timeoutId);
+                if (e.name === 'AbortError') {
+                    showResult(false, '请求超时（150秒），服务器可能正在处理复杂请求，请稍后重试');
+                } else {
+                    showResult(false, '请求失败: ' + e.message);
+                }
             } finally {
                 document.getElementById('loading').style.display = 'none';
             }
@@ -754,6 +804,29 @@ async def home():
                 document.getElementById('db-info').innerHTML = '<p style="color:red">获取失败: ' + e.message + '</p>';
             }
         }
+
+        async function getDebugInfo() {
+            try {
+                const response = await fetch('/api/debug');
+                const data = await response.json();
+
+                let html = '<h3>调试信息</h3>';
+                html += '<p><strong>服务:</strong> ' + data.service + '</p>';
+                html += '<p><strong>数据库路径:</strong> ' + data.db_path + '</p>';
+                html += '<p><strong>TransVar 可用:</strong> ' + (data.transvar_available ? '是' : '否') + '</p>';
+                html += '<p><strong>TransVar 版本:</strong> ' + data.transvar_version + '</p>';
+
+                html += '<h4 style="margin-top:15px;">hg38 文件状态</h4>';
+                html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.hg38, null, 2) + '</pre>';
+
+                html += '<h4 style="margin-top:15px;">hg19 文件状态</h4>';
+                html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.hg19, null, 2) + '</pre>';
+
+                document.getElementById('db-info').innerHTML = html;
+            } catch (e) {
+                document.getElementById('db-info').innerHTML = '<p style="color:red">获取调试信息失败: ' + e.message + '</p>';
+            }
+        }
     </script>
 </body>
 </html>
@@ -764,6 +837,73 @@ async def home():
 async def health_check():
     """健康检查接口"""
     return {"status": "healthy", "service": "TransVar API"}
+
+
+@app.get("/api/debug")
+async def debug_info():
+    """调试接口 - 检查服务状态和数据库"""
+    logger.info("调试接口被调用")
+
+    def check_db_files(refversion):
+        if refversion == "hg38":
+            ucsc_path = UCSC_HG38
+            ncbi_path = REFSEQ_HG38
+        else:
+            ucsc_path = UCSC_HG19
+            ncbi_path = REFSEQ_HG19
+
+        files_status = {}
+
+        # UCSC 文件
+        ucsc_refseq = f"{ucsc_path}/ncbiRefSeq.txt.gz"
+        ucsc_ref = f"{ucsc_path}/{refversion}.fa"
+        ucsc_db = f"{ucsc_path}/ncbiRefSeq.txt.gz.transvardb"
+        ucsc_gene_idx = f"{ucsc_path}/ncbiRefSeq.txt.gz.gene_idx"
+        ucsc_trxn_idx = f"{ucsc_path}/ncbiRefSeq.txt.gz.trxn_idx"
+
+        files_status["ucsc"] = {
+            "refseq_file": {"path": ucsc_refseq, "exists": os.path.exists(ucsc_refseq)},
+            "reference_file": {"path": ucsc_ref, "exists": os.path.exists(ucsc_ref)},
+            "transvardb": {"path": ucsc_db, "exists": os.path.exists(ucsc_db)},
+            "gene_idx": {"path": ucsc_gene_idx, "exists": os.path.exists(ucsc_gene_idx)},
+            "trxn_idx": {"path": ucsc_trxn_idx, "exists": os.path.exists(ucsc_trxn_idx)}
+        }
+
+        # NCBI 文件
+        ncbi_refseq = f"{ncbi_path}/{refversion}_refseq.gff.gz"
+        ncbi_ref = f"{ncbi_path}/{refversion}.fa"
+        ncbi_db = f"{ncbi_path}/{refversion}_refseq.gff.gz.transvardb"
+        ncbi_gene_idx = f"{ncbi_path}/{refversion}_refseq.gff.gz.gene_idx"
+        ncbi_trxn_idx = f"{ncbi_path}/{refversion}_refseq.gff.gz.trxn_idx"
+
+        files_status["ncbi_refseq"] = {
+            "refseq_file": {"path": ncbi_refseq, "exists": os.path.exists(ncbi_refseq)},
+            "reference_file": {"path": ncbi_ref, "exists": os.path.exists(ncbi_ref)},
+            "transvardb": {"path": ncbi_db, "exists": os.path.exists(ncbi_db)},
+            "gene_idx": {"path": ncbi_gene_idx, "exists": os.path.exists(ncbi_gene_idx)},
+            "trxn_idx": {"path": ncbi_trxn_idx, "exists": os.path.exists(ncbi_trxn_idx)}
+        }
+
+        return files_status
+
+    # 测试 transvar 命令是否可用
+    transvar_available = False
+    transvar_version = ""
+    try:
+        result = subprocess.run(["transvar", "--version"], capture_output=True, text=True, timeout=10)
+        transvar_available = result.returncode == 0
+        transvar_version = result.stdout.strip() or result.stderr.strip()
+    except Exception as e:
+        transvar_version = f"Error: {str(e)}"
+
+    return {
+        "service": "TransVar API",
+        "db_path": DB_PATH,
+        "transvar_available": transvar_available,
+        "transvar_version": transvar_version,
+        "hg38": check_db_files("hg38"),
+        "hg19": check_db_files("hg19")
+    }
 
 
 @app.post("/api/annotate", response_model=AnnotationResponse)
