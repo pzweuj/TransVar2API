@@ -1,0 +1,61 @@
+# TransVar API for HuggingFace Spaces
+# 仓库: https://github.com/pzweuj/TransVar2API
+# 启动脚本: scripts/hf_startup.sh
+
+FROM python:3.9-slim
+
+# 环境变量
+ENV DEBIAN_FRONTEND=noninteractive \
+    TRANSVAR_DB_PATH=/data/transvar_db \
+    PYTHONUNBUFFERED=1 \
+    PORT=7860
+
+# 安装系统依赖
+RUN apt-get update && apt-get install -y \
+    wget \
+    curl \
+    git \
+    samtools \
+    build-essential \
+    zlib1g-dev \
+    libbz2-dev \
+    liblzma-dev \
+    libcurl4-gnutls-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# 从 GitHub 克隆仓库
+WORKDIR /app
+RUN git clone https://github.com/pzweuj/TransVar2API.git .
+
+# 安装 Python 依赖和 transvar
+RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir transvar
+
+# 创建数据目录
+RUN mkdir -p /data/transvar_db/refseq_hg38 /data/transvar_db/refseq_hg19
+
+# ========== 下载参考基因组数据 ==========
+WORKDIR /data/transvar_db/refseq_hg38
+# hg38 参考基因组
+RUN wget -q -O hg38.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz && \
+    gunzip -f hg38.fa.gz && \
+    samtools faidx hg38.fa
+# hg38 GTF 格式的 RefSeq 注释
+RUN wget -q -O hg38.ncbiRefSeq.gtf.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/genes/hg38.ncbiRefSeq.gtf.gz
+
+WORKDIR /data/transvar_db/refseq_hg19
+# hg19 参考基因组
+RUN wget -q -O hg19.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz && \
+    gunzip -f hg19.fa.gz && \
+    samtools faidx hg19.fa
+# hg19 GTF 格式的 RefSeq 注释
+RUN wget -q -O hg19.ncbiRefSeq.gtf.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/genes/hg19.ncbiRefSeq.gtf.gz
+
+# 复制启动脚本并设置权限
+WORKDIR /app
+COPY scripts/hf_startup.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
+EXPOSE 7860
+
+CMD ["/app/start.sh"]
