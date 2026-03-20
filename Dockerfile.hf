@@ -31,6 +31,9 @@ RUN git clone https://github.com/pzweuj/TransVar2API.git .
 RUN pip3 install --no-cache-dir -r requirements.txt
 RUN pip3 install --no-cache-dir transvar
 
+# 修补 transvar 的 localdb.py 以修复 KeyError: 'product' 错误
+RUN python3 /app/scripts/patch_transvar.py
+
 # 创建数据目录
 RUN mkdir -p /data/transvar_db/ucsc_hg38 /data/transvar_db/ucsc_hg19 \
              /data/transvar_db/ncbi_refseq_hg38 /data/transvar_db/ncbi_refseq_hg19
