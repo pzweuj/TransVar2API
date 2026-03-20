@@ -15,6 +15,7 @@ RUN apt-get update && apt-get install -y \
     curl \
     git \
     samtools \
+    tabix \
     build-essential \
     zlib1g-dev \
     libbz2-dev \
