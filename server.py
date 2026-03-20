@@ -18,7 +18,7 @@ import uvicorn
 app = FastAPI(
     title="TransVar API",
     description="HGVS 变异注释工具 TransVar 的 RESTful API 服务",
-    version="1.0.0"
+    version="1.1.0"
 )
 
 # 启用 CORS
@@ -43,8 +43,9 @@ REFSEQ_HG19 = f"{DB_PATH}/ncbi_refseq_hg19"
 class AnnotationRequest(BaseModel):
     """变异注释请求模型"""
     variant: str = Field(..., description="变异描述，如 PIK3CA:p.E545K 或 NM_006218.4:c.1633G>A")
-    refversion: str = Field(default="hg38_refseq", description="参考基因组版本: hg38_refseq 或 hg19_refseq")
+    refversion: str = Field(default="hg38", description="参考基因组版本: hg38 或 hg19")
     mode: str = Field(default="panno", description="注释模式: panno(蛋白), canno(cDNA), ganno(DNA), codonsearch(密码子)")
+    sources: List[str] = Field(default=["ucsc"], description="数据库来源: ucsc 和/或 ncbi_refseq")
 
 
 class AnnotationResponse(BaseModel):
@@ -53,7 +54,9 @@ class AnnotationResponse(BaseModel):
     input: str
     refversion: str
     mode: str
-    result: Optional[str] = None
+    sources: List[str] = []
+    results: Optional[List[Dict[str, Any]]] = None
+    result: Optional[str] = None  # 兼容旧版，合并后的结果
     error: Optional[str] = None
     raw_output: Optional[str] = None
 
@@ -61,8 +64,9 @@ class AnnotationResponse(BaseModel):
 class BatchAnnotationRequest(BaseModel):
     """批量注释请求模型"""
     variants: List[str] = Field(..., description="变异列表")
-    refversion: str = Field(default="hg38_refseq", description="参考基因组版本")
+    refversion: str = Field(default="hg38", description="参考基因组版本")
     mode: str = Field(default="panno", description="注释模式")
+    sources: List[str] = Field(default=["ucsc"], description="数据库来源: ucsc 和/或 ncbi_refseq")
 
 
 class DatabaseInfo(BaseModel):
@@ -71,14 +75,15 @@ class DatabaseInfo(BaseModel):
     hg19: Dict[str, Any]
 
 
-def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
+def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc") -> Dict[str, Any]:
     """
     执行 TransVar 命令
 
     Args:
         variant: 变异描述
         mode: 注释模式 (panno/canno/ganno/codonsearch)
-        refversion: 参考基因组版本
+        refversion: 参考基因组版本 (hg38 或 hg19)
+        source: 数据库来源 (ucsc 或 ncbi_refseq)
 
     Returns:
         包含执行结果的字典
@@ -91,35 +96,38 @@ def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
             "error": f"无效的模式: {mode}，支持的模式: {', '.join(valid_modes)}"
         }
 
-    # 选择数据库路径和类型
-    # UCSC: hg38_refseq, hg19_refseq
-    # NCBI RefSeq: hg38_ncbi_refseq, hg19_ncbi_refseq
-    if "ncbi_refseq" in refversion:
-        db_type = "--refseq"
-        if "hg38" in refversion:
-            db_path = REFSEQ_HG38
-            refseq_file = f"{db_path}/hg38_refseq.gff.gz"
-        elif "hg19" in refversion:
-            db_path = REFSEQ_HG19
-            refseq_file = f"{db_path}/hg19_refseq.gff.gz"
-        else:
-            return {"success": False, "error": f"无效的版本: {refversion}"}
-    elif "hg38" in refversion:
-        db_type = "--ucsc"
-        db_path = UCSC_HG38
-        refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
-    elif "hg19" in refversion:
-        db_type = "--ucsc"
-        db_path = UCSC_HG19
-        refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
-    else:
+    # 验证数据库来源
+    valid_sources = ["ucsc", "ncbi_refseq"]
+    if source not in valid_sources:
         return {
             "success": False,
-            "error": f"无效的参考基因组版本: {refversion}，支持的版本: hg38_refseq, hg19_refseq, hg38_ncbi_refseq, hg19_ncbi_refseq"
+            "error": f"无效的数据库来源: {source}，支持的来源: {', '.join(valid_sources)}"
         }
 
+    # 选择数据库路径和类型
+    if source == "ncbi_refseq":
+        db_type = "--refseq"
+        if refversion == "hg38":
+            db_path = REFSEQ_HG38
+            refseq_file = f"{db_path}/hg38_refseq.gff.gz.transvardb"
+        elif refversion == "hg19":
+            db_path = REFSEQ_HG19
+            refseq_file = f"{db_path}/hg19_refseq.gff.gz.transvardb"
+        else:
+            return {"success": False, "error": f"无效的版本: {refversion}"}
+    else:  # ucsc
+        db_type = "--ucsc"
+        if refversion == "hg38":
+            db_path = UCSC_HG38
+            refseq_file = f"{db_path}/ncbiRefSeq.txt.gz.transvardb"
+        elif refversion == "hg19":
+            db_path = UCSC_HG19
+            refseq_file = f"{db_path}/ncbiRefSeq.txt.gz.transvardb"
+        else:
+            return {"success": False, "error": f"无效的版本: {refversion}"}
+
     # 检查数据库是否存在
-    reference_file = f"{db_path}/hg38.fa" if "hg38" in refversion else f"{db_path}/hg19.fa"
+    reference_file = f"{db_path}/hg38.fa" if refversion == "hg38" else f"{db_path}/hg19.fa"
 
     if not os.path.exists(refseq_file):
         return {
@@ -137,16 +145,16 @@ def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
     cmd = [
         "transvar", mode,
         "-i", variant,
-        db_type,
+        db_type, refseq_file,
+        "--reference", reference_file,
         "--refversion", refversion,
         "-o", "/dev/stdout"
     ]
 
     try:
-        # 设置环境变量，确保 transvar 能找到配置文件和数据库
         env = {
             **os.environ,
-            "TRANSVAR_DB_PATH": db_path,
+            "TRANSVAR_DB_PATH": DB_PATH,
             "HOME": os.path.expanduser("~")
         }
         result = subprocess.run(
@@ -155,7 +163,7 @@ def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
             text=True,
             timeout=60,
             env=env,
-            cwd="/app"  # 在工作目录下运行
+            cwd="/app"
         )
 
         output = result.stdout
@@ -164,12 +172,14 @@ def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
         if result.returncode == 0 and output:
             return {
                 "success": True,
+                "source": source,
                 "result": output.strip(),
                 "raw_output": output
             }
         else:
             return {
                 "success": False,
+                "source": source,
                 "error": error.strip() if error else "未找到注释结果",
                 "raw_output": output
             }
@@ -177,11 +187,13 @@ def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
     except subprocess.TimeoutExpired:
         return {
             "success": False,
+            "source": source,
             "error": "执行超时，请检查变异格式是否正确"
         }
     except Exception as e:
         return {
             "success": False,
+            "source": source,
             "error": f"执行错误: {str(e)}"
         }
 
@@ -189,12 +201,6 @@ def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
 def parse_transvar_output(output: str) -> Dict[str, Any]:
     """
     解析 TransVar 输出
-
-    Args:
-        output: TransVar 原始输出
-
-    Returns:
-        解析后的结构化数据
     """
     lines = output.strip().split('\n')
     parsed = {
@@ -275,7 +281,7 @@ async def home():
             margin-bottom: 8px;
             color: #333;
         }
-        input, select {
+        input[type="text"], select, textarea {
             width: 100%;
             padding: 12px 16px;
             border: 2px solid #e0e0e0;
@@ -283,9 +289,30 @@ async def home():
             font-size: 16px;
             transition: border-color 0.3s;
         }
-        input:focus, select:focus {
+        input:focus, select:focus, textarea:focus {
             outline: none;
             border-color: #667eea;
+        }
+        .checkbox-group {
+            display: flex;
+            gap: 20px;
+            margin-top: 8px;
+        }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+        }
+        .checkbox-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+        .checkbox-item label {
+            margin: 0;
+            cursor: pointer;
+            font-weight: normal;
         }
         .btn {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
@@ -334,8 +361,24 @@ async def home():
             background: white;
             padding: 15px;
             border-radius: 6px;
-            max-height: 400px;
+            max-height: 500px;
             overflow-y: auto;
+        }
+        .source-label {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-right: 8px;
+        }
+        .source-ucsc {
+            background: #e3f2fd;
+            color: #1565c0;
+        }
+        .source-ncbi {
+            background: #f3e5f5;
+            color: #7b1fa2;
         }
         .examples {
             margin-top: 20px;
@@ -411,19 +454,34 @@ async def home():
             color: #555;
             font-size: 14px;
         }
+        .db-status {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-left: 8px;
+        }
+        .db-available {
+            background: #c8e6c9;
+            color: #2e7d32;
+        }
+        .db-unavailable {
+            background: #ffcdd2;
+            color: #c62828;
+        }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
             <h1>TransVar HGVS 注释工具</h1>
-            <p>使用 RefSeq 数据库进行变异注释</p>
+            <p>支持 UCSC RefSeq 和 NCBI RefSeq 数据库进行变异注释</p>
         </div>
 
         <div class="card">
             <div class="info-box">
                 <h4>简介</h4>
-                <p>TransVar 是一个强大的 HGVS 变异注释工具，支持蛋白 (p.)、cDNA (c.) 和基因组 (g.) 水平的变异注释。使用 RefSeq 转录本数据库，确保临床基因诊断的准确性。</p>
+                <p>TransVar 是一个强大的 HGVS 变异注释工具，支持蛋白 (p.)、cDNA (c.) 和基因组 (g.) 水平的变异注释。您可以选择使用 UCSC RefSeq 或 NCBI RefSeq 转录本数据库，或同时使用两者进行注释。</p>
             </div>
 
             <div class="tabs">
@@ -441,8 +499,8 @@ async def home():
                 <div class="form-group">
                     <label for="refversion">参考基因组版本</label>
                     <select id="refversion">
-                        <option value="hg38_refseq">hg38 (GRCh38) - 推荐</option>
-                        <option value="hg19_refseq">hg19 (GRCh37)</option>
+                        <option value="hg38">hg38 (GRCh38) - 推荐</option>
+                        <option value="hg19">hg19 (GRCh37)</option>
                     </select>
                 </div>
 
@@ -454,6 +512,20 @@ async def home():
                         <option value="ganno">基因组注释 (g.) 例如: g.178921852G>A</option>
                         <option value="codonsearch">密码子搜索 例如: KRAS:c.12GTT></option>
                     </select>
+                </div>
+
+                <div class="form-group">
+                    <label>数据库来源 (可多选)</label>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="source-ucsc" value="ucsc" checked>
+                            <label for="source-ucsc">UCSC RefSeq</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="source-ncbi" value="ncbi_refseq">
+                            <label for="source-ncbi">NCBI RefSeq</label>
+                        </div>
+                    </div>
                 </div>
 
                 <button class="btn" onclick="annotate()">提交注释</button>
@@ -478,8 +550,8 @@ async def home():
                 <div class="form-group">
                     <label for="batch-refversion">参考基因组版本</label>
                     <select id="batch-refversion">
-                        <option value="hg38_refseq">hg38 (GRCh38)</option>
-                        <option value="hg19_refseq">hg19 (GRCh37)</option>
+                        <option value="hg38">hg38 (GRCh38)</option>
+                        <option value="hg19">hg19 (GRCh37)</option>
                     </select>
                 </div>
 
@@ -491,6 +563,20 @@ async def home():
                         <option value="ganno">基因组注释 (g.)</option>
                         <option value="codonsearch">密码子搜索</option>
                     </select>
+                </div>
+
+                <div class="form-group">
+                    <label>数据库来源 (可多选)</label>
+                    <div class="checkbox-group">
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="batch-source-ucsc" value="ucsc" checked>
+                            <label for="batch-source-ucsc">UCSC RefSeq</label>
+                        </div>
+                        <div class="checkbox-item">
+                            <input type="checkbox" id="batch-source-ncbi" value="ncbi_refseq">
+                            <label for="batch-source-ncbi">NCBI RefSeq</label>
+                        </div>
+                    </div>
                 </div>
 
                 <button class="btn" onclick="batchAnnotate()">批量提交</button>
@@ -530,6 +616,17 @@ async def home():
             document.getElementById('variant').value = variant;
         }
 
+        function getSources(prefix) {
+            const sources = [];
+            if (document.getElementById(prefix + '-source-ucsc').checked) {
+                sources.push('ucsc');
+            }
+            if (document.getElementById(prefix + '-source-ncbi').checked) {
+                sources.push('ncbi_refseq');
+            }
+            return sources.length > 0 ? sources : ['ucsc'];
+        }
+
         function showResult(success, message) {
             const resultDiv = document.getElementById('result');
             resultDiv.className = 'result ' + (success ? 'success' : 'error');
@@ -537,10 +634,17 @@ async def home():
             resultDiv.style.display = 'block';
         }
 
+        function formatSourceLabel(source) {
+            const labelClass = source === 'ucsc' ? 'source-ucsc' : 'source-ncbi';
+            const labelName = source === 'ucsc' ? 'UCSC' : 'NCBI';
+            return '<span class="source-label ' + labelClass + '">' + labelName + '</span>';
+        }
+
         async function annotate() {
             const variant = document.getElementById('variant').value.trim();
             const refversion = document.getElementById('refversion').value;
             const mode = document.getElementById('mode').value;
+            const sources = getSources('');
 
             if (!variant) {
                 showResult(false, '请输入变异描述');
@@ -554,12 +658,22 @@ async def home():
                 const response = await fetch('/api/annotate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({variant, refversion, mode})
+                    body: JSON.stringify({variant, refversion, mode, sources})
                 });
                 const data = await response.json();
 
-                if (data.success) {
-                    showResult(true, data.result || data.raw_output || '注释成功但无输出');
+                if (data.success && data.results) {
+                    let output = '';
+                    data.results.forEach(r => {
+                        output += formatSourceLabel(r.source) + '\\n';
+                        if (r.success) {
+                            output += r.result || '无输出';
+                        } else {
+                            output += '错误: ' + (r.error || '注释失败');
+                        }
+                        output += '\\n\\n' + '─'.repeat(60) + '\\n\\n';
+                    });
+                    showResult(true, output);
                 } else {
                     showResult(false, data.error || '注释失败');
                 }
@@ -574,6 +688,7 @@ async def home():
             const variants = document.getElementById('batch-variants').value.trim().split('\\n').filter(v => v.trim());
             const refversion = document.getElementById('batch-refversion').value;
             const mode = document.getElementById('batch-mode').value;
+            const sources = getSources('batch-');
 
             if (!variants.length) {
                 showResult(false, '请输入变异列表');
@@ -587,7 +702,7 @@ async def home():
                 const response = await fetch('/api/batch_annotate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({variants, refversion, mode})
+                    body: JSON.stringify({variants, refversion, mode, sources})
                 });
                 const data = await response.json();
 
@@ -595,7 +710,15 @@ async def home():
                     let output = '';
                     data.results.forEach(r => {
                         output += '输入: ' + r.input + '\\n';
-                        output += '结果: ' + (r.result || r.error || '无输出') + '\\n';
+                        if (r.results) {
+                            r.results.forEach(sr => {
+                                output += formatSourceLabel(sr.source) + ' ';
+                                output += (sr.success ? (sr.result || '无输出') : '错误: ' + (sr.error || '失败'));
+                                output += '\\n';
+                            });
+                        } else {
+                            output += '结果: ' + (r.result || r.error || '无输出');
+                        }
                         output += '---\\n';
                     });
                     showResult(true, output);
@@ -614,9 +737,16 @@ async def home():
                 const response = await fetch('/api/db_info');
                 const data = await response.json();
 
-                let html = '<h3>数据库状态</h3><ul>';
-                html += '<li><strong>hg38:</strong> ' + (data.hg38.available ? '已安装' : '未安装') + '</li>';
-                html += '<li><strong>hg19:</strong> ' + (data.hg19.available ? '已安装' : '未安装') + '</li>';
+                let html = '<h3>数据库状态</h3>';
+
+                html += '<h4 style="margin-top:15px;color:#333;">hg38 (GRCh38)</h4><ul>';
+                html += '<li><strong>UCSC RefSeq:</strong> ' + (data.hg38.ucsc_available ? '<span class="db-status db-available">可用</span>' : '<span class="db-status db-unavailable">不可用</span>') + '</li>';
+                html += '<li><strong>NCBI RefSeq:</strong> ' + (data.hg38.ncbi_available ? '<span class="db-status db-available">可用</span>' : '<span class="db-status db-unavailable">不可用</span>') + '</li>';
+                html += '</ul>';
+
+                html += '<h4 style="margin-top:15px;color:#333;">hg19 (GRCh37)</h4><ul>';
+                html += '<li><strong>UCSC RefSeq:</strong> ' + (data.hg19.ucsc_available ? '<span class="db-status db-available">可用</span>' : '<span class="db-status db-unavailable">不可用</span>') + '</li>';
+                html += '<li><strong>NCBI RefSeq:</strong> ' + (data.hg19.ncbi_available ? '<span class="db-status db-available">可用</span>' : '<span class="db-status db-unavailable">不可用</span>') + '</li>';
                 html += '</ul>';
 
                 document.getElementById('db-info').innerHTML = html;
@@ -642,19 +772,38 @@ async def annotate(request: AnnotationRequest):
     单个变异注释接口
 
     - **variant**: 变异描述 (如 PIK3CA:p.E545K)
-    - **refversion**: 参考基因组版本 (hg38_refseq 或 hg19_refseq)
+    - **refversion**: 参考基因组版本 (hg38 或 hg19)
     - **mode**: 注释模式 (panno/canno/ganno/codonsearch)
+    - **sources**: 数据库来源列表 (ucsc, ncbi_refseq)
     """
-    result = run_transvar(request.variant, request.mode, request.refversion)
+    sources = request.sources if request.sources else ["ucsc"]
+    results = []
+    all_success = True
+    merged_result = ""
+
+    for source in sources:
+        result = run_transvar(request.variant, request.mode, request.refversion, source)
+        results.append({
+            "source": source,
+            "success": result.get("success", False),
+            "result": result.get("result"),
+            "error": result.get("error"),
+            "raw_output": result.get("raw_output")
+        })
+        if not result.get("success", False):
+            all_success = False
+        if result.get("result"):
+            merged_result += f"[{source}]\n{result['result']}\n\n"
 
     return AnnotationResponse(
-        success=result.get("success", False),
+        success=all_success or len([r for r in results if r["success"]]) > 0,
         input=request.variant,
         refversion=request.refversion,
         mode=request.mode,
-        result=result.get("result"),
-        error=result.get("error"),
-        raw_output=result.get("raw_output")
+        sources=sources,
+        results=results,
+        result=merged_result.strip() if merged_result else None,
+        error=None if all_success else "部分数据库注释失败"
     )
 
 
@@ -666,47 +815,64 @@ async def batch_annotate(request: BatchAnnotationRequest):
     - **variants**: 变异列表
     - **refversion**: 参考基因组版本
     - **mode**: 注释模式
+    - **sources**: 数据库来源列表
     """
+    sources = request.sources if request.sources else ["ucsc"]
     results = []
 
     for variant in request.variants:
-        result = run_transvar(variant.strip(), request.mode, request.refversion)
+        variant_results = []
+        for source in sources:
+            result = run_transvar(variant.strip(), request.mode, request.refversion, source)
+            variant_results.append({
+                "source": source,
+                "success": result.get("success", False),
+                "result": result.get("result"),
+                "error": result.get("error")
+            })
         results.append({
             "input": variant,
-            "success": result.get("success", False),
-            "result": result.get("result"),
-            "error": result.get("error")
+            "success": any(r["success"] for r in variant_results),
+            "results": variant_results
         })
 
     return {
         "success": True,
         "total": len(results),
+        "sources": sources,
         "results": results
     }
 
 
-@app.get("/api/db_info", response_model=DatabaseInfo)
+@app.get("/api/db_info")
 async def get_db_info():
     """获取数据库信息"""
-    def check_db(db_path):
-        refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
-        reference_file = f"{db_path}/hg38.fa"
-        if "hg19" in db_path:
-            reference_file = f"{db_path}/hg19.fa"
+    def check_db(refversion):
+        if refversion == "hg38":
+            ucsc_path = UCSC_HG38
+            ncbi_path = REFSEQ_HG38
+        else:
+            ucsc_path = UCSC_HG19
+            ncbi_path = REFSEQ_HG19
+
+        ucsc_transvardb = f"{ucsc_path}/ncbiRefSeq.txt.gz.transvardb"
+        ncbi_transvardb = f"{ncbi_path}/{refversion}_refseq.gff.gz.transvardb"
+        reference_file = f"{ucsc_path}/{refversion}.fa"
 
         return {
-            "available": os.path.exists(refseq_file) and os.path.exists(reference_file),
-            "refseq_file": refseq_file,
+            "ucsc_available": os.path.exists(ucsc_transvardb) and os.path.exists(reference_file),
+            "ncbi_available": os.path.exists(ncbi_transvardb) and os.path.exists(reference_file),
+            "ucsc_file": ucsc_transvardb,
+            "ncbi_file": ncbi_transvardb,
             "reference_file": reference_file
         }
 
-    return DatabaseInfo(
-        hg38=check_db(HG38_REFSEQ),
-        hg19=check_db(HG19_REFSEQ)
-    )
+    return {
+        "hg38": check_db("hg38"),
+        "hg19": check_db("hg19")
+    }
 
 
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 7860))
     uvicorn.run(app, host="0.0.0.0", port=port)
