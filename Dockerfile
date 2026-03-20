@@ -1,73 +1,67 @@
-FROM ubuntu:22.04
+# TransVar API Docker Image
+# 仓库: https://github.com/pzweuj/TransVar2API
+
+FROM python:3.9-slim
 
 # 设置环境变量
 ENV DEBIAN_FRONTEND=noninteractive \
-    TRANSVAR_DB_PATH=/data/transvar_db
+    TRANSVAR_DB_PATH=/data/transvar_db \
+    PYTHONUNBUFFERED=1
 
 # 安装系统依赖
 RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    python3-venv \
     wget \
     curl \
+    git \
     samtools \
+    tabix \
     build-essential \
     zlib1g-dev \
     libbz2-dev \
     liblzma-dev \
     libcurl4-gnutls-dev \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3 /usr/bin/python
+    && rm -rf /var/lib/apt/lists/*
 
-# 安装 Python 依赖
-COPY requirements.txt /tmp/requirements.txt
-RUN pip3 install --no-cache-dir -r /tmp/requirements.txt
-
-# 安装 transvar
-RUN pip3 install --no-cache-dir transvar
-
-# 创建工作目录
+# 复制项目文件
 WORKDIR /app
-
-# 复制脚本和配置文件
+COPY requirements.txt /app/
 COPY server.py /app/
 COPY scripts/ /app/scripts/
 
+# 安装 Python 依赖和 transvar
+RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir transvar
+
+# 修补 transvar 的 localdb.py 以修复 KeyError: 'product' 错误
+RUN python3 /app/scripts/patch_transvar.py
+
 # 创建数据目录
-RUN mkdir -p /data/transvar_db/refseq_hg38 /data/transvar_db/refseq_hg19
+RUN mkdir -p /data/transvar_db/ucsc_hg38 /data/transvar_db/ucsc_hg19 \
+             /data/transvar_db/ncbi_refseq_hg38 /data/transvar_db/ncbi_refseq_hg19
 
-# ========== 构建 hg38 数据库 ==========
-WORKDIR /data/transvar_db/refseq_hg38
-
-# 下载 hg38 参考基因组
-RUN echo "Downloading hg38 reference genome..." && \
-    wget -q -O hg38.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz && \
+# ========== UCSC 数据库 ==========
+WORKDIR /data/transvar_db/ucsc_hg38
+RUN wget -q -O hg38.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz && \
     gunzip -f hg38.fa.gz && \
     samtools faidx hg38.fa
+RUN wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/ncbiRefSeq.txt.gz
 
-# 下载 hg38 RefSeq 注释并构建索引
-RUN echo "Building hg38 transvar index..." && \
-    wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/ncbiRefSeq.txt.gz && \
-    transvar index --refseq ncbiRefSeq.txt.gz && \
-    transvar config -k reference -v /data/transvar_db/refseq_hg38/hg38.fa --refversion hg38_refseq && \
-    transvar config -k refseq -v /data/transvar_db/refseq_hg38/ncbiRefSeq.txt.gz --refversion hg38_refseq
-
-# ========== 构建 hg19 数据库 ==========
-WORKDIR /data/transvar_db/refseq_hg19
-
-# 下载 hg19 参考基因组
-RUN echo "Downloading hg19 reference genome..." && \
-    wget -q -O hg19.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz && \
+WORKDIR /data/transvar_db/ucsc_hg19
+RUN wget -q -O hg19.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz && \
     gunzip -f hg19.fa.gz && \
     samtools faidx hg19.fa
+RUN wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/ncbiRefSeq.txt.gz
 
-# 下载 hg19 RefSeq 注释并构建索引
-RUN echo "Building hg19 transvar index..." && \
-    wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/ncbiRefSeq.txt.gz && \
-    transvar index --refseq ncbiRefSeq.txt.gz && \
-    transvar config -k reference -v /data/transvar_db/refseq_hg19/hg19.fa --refversion hg19_refseq && \
-    transvar config -k refseq -v /data/transvar_db/refseq_hg19/ncbiRefSeq.txt.gz --refversion hg19_refseq
+# ========== NCBI RefSeq 数据库 (软链接 UCSC 的参考基因组) ==========
+WORKDIR /data/transvar_db/ncbi_refseq_hg38
+RUN ln -sf ../ucsc_hg38/hg38.fa ./hg38.fa && \
+    samtools faidx hg38.fa
+RUN wget -q -O hg38_refseq.gff.gz https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_genomic.gff.gz
+
+WORKDIR /data/transvar_db/ncbi_refseq_hg19
+RUN ln -sf ../ucsc_hg19/hg19.fa ./hg19.fa && \
+    samtools faidx hg19.fa
+RUN wget -q -O hg19_refseq.gff.gz https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh37_latest/refseq_identifiers/GRCh37_latest_genomic.gff.gz
 
 # 返回工作目录
 WORKDIR /app
