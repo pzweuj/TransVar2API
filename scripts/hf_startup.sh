@@ -7,21 +7,21 @@ echo "=========================================="
 
 # hg38 setup
 echo "[1/4] Setting up hg38..."
-echo "  - Building transvar index from GTF..."
-transvar index --refseq /data/transvar_db/refseq_hg38/hg38.ncbiRefSeq.gtf.gz
+echo "  - Building transvar index with --ucsc..."
+transvar index --ucsc /data/transvar_db/refseq_hg38/ncbiRefSeq.txt.gz
 
 echo "  - Configuring hg38..."
 transvar config -k reference -v /data/transvar_db/refseq_hg38/hg38.fa --refversion hg38_refseq
-transvar config -k refseq -v /data/transvar_db/refseq_hg38/hg38.ncbiRefSeq.gtf.gz --refversion hg38_refseq
+transvar config -k ucsc -v /data/transvar_db/refseq_hg38/ncbiRefSeq.txt.gz --refversion hg38_refseq
 
 # hg19 setup
 echo "[2/4] Setting up hg19..."
-echo "  - Building transvar index from GTF..."
-transvar index --refseq /data/transvar_db/refseq_hg19/hg19.ncbiRefSeq.gtf.gz
+echo "  - Building transvar index with --ucsc..."
+transvar index --ucsc /data/transvar_db/refseq_hg19/ncbiRefSeq.txt.gz
 
 echo "  - Configuring hg19..."
 transvar config -k reference -v /data/transvar_db/refseq_hg19/hg19.fa --refversion hg19_refseq
-transvar config -k refseq -v /data/transvar_db/refseq_hg19/hg19.ncbiRefSeq.gtf.gz --refversion hg19_refseq
+transvar config -k ucsc -v /data/transvar_db/refseq_hg19/ncbiRefSeq.txt.gz --refversion hg19_refseq
 
 # Verify setup
 echo "[3/4] Verifying databases..."

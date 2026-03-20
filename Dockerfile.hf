@@ -1,6 +1,5 @@
 # TransVar API for HuggingFace Spaces
 # 仓库: https://github.com/pzweuj/TransVar2API
-# 启动脚本: scripts/hf_startup.sh
 
 FROM python:3.9-slim
 
@@ -40,22 +39,21 @@ WORKDIR /data/transvar_db/refseq_hg38
 RUN wget -q -O hg38.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz && \
     gunzip -f hg38.fa.gz && \
     samtools faidx hg38.fa
-# hg38 GTF 格式的 RefSeq 注释
-RUN wget -q -O hg38.ncbiRefSeq.gtf.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/genes/hg38.ncbiRefSeq.gtf.gz
+# hg38 UCSC RefSeq 表格
+RUN wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/ncbiRefSeq.txt.gz
 
 WORKDIR /data/transvar_db/refseq_hg19
 # hg19 参考基因组
 RUN wget -q -O hg19.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz && \
     gunzip -f hg19.fa.gz && \
     samtools faidx hg19.fa
-# hg19 GTF 格式的 RefSeq 注释
-RUN wget -q -O hg19.ncbiRefSeq.gtf.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/genes/hg19.ncbiRefSeq.gtf.gz
+# hg19 UCSC RefSeq 表格
+RUN wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/ncbiRefSeq.txt.gz
 
-# 复制启动脚本并设置权限
+# 设置启动脚本权限
 WORKDIR /app
-COPY scripts/hf_startup.sh /app/start.sh
-RUN chmod +x /app/start.sh
+RUN chmod +x /app/scripts/hf_startup.sh
 
 EXPOSE 7860
 
-CMD ["/app/start.sh"]
+CMD ["/app/scripts/hf_startup.sh"]

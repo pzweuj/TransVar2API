@@ -114,11 +114,11 @@ def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
             "error": f"参考基因组文件不存在: {reference_file}"
         }
 
-    # 构建 TransVar 命令
+    # 构建 TransVar 命令 (使用 --ucsc 配合 UCSC 数据库)
     cmd = [
         "transvar", mode,
         "-i", variant,
-        "--refseq",
+        "--ucsc",
         "--refversion", refversion,
         "-o", "/dev/stdout"
     ]
@@ -681,4 +681,6 @@ async def get_db_info():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    import os
+    port = int(os.environ.get("PORT", 7860))
+    uvicorn.run(app, host="0.0.0.0", port=port)
