@@ -116,62 +116,41 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             "error": f"无效的数据库来源: {source}，支持的来源: {', '.join(valid_sources)}"
         }
 
-    # 选择数据库路径和类型
+    # 根据 source 和 refversion 确定 transvar 使用的 refversion 名称
+    # 启动脚本中配置的是: hg38_refseq, hg19_refseq (UCSC), hg38_ncbi_refseq, hg19_ncbi_refseq (NCBI)
     if source == "ncbi_refseq":
         db_type = "--refseq"
         if refversion == "hg38":
+            transvar_refversion = "hg38_ncbi_refseq"
             db_path = REFSEQ_HG38
-            refseq_file = f"{db_path}/hg38_refseq.gff.gz"
         elif refversion == "hg19":
+            transvar_refversion = "hg19_ncbi_refseq"
             db_path = REFSEQ_HG19
-            refseq_file = f"{db_path}/hg19_refseq.gff.gz"
         else:
             logger.error(f"无效的版本: {refversion}")
             return {"success": False, "error": f"无效的版本: {refversion}"}
     else:  # ucsc
         db_type = "--ucsc"
         if refversion == "hg38":
+            transvar_refversion = "hg38_refseq"
             db_path = UCSC_HG38
-            refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
         elif refversion == "hg19":
+            transvar_refversion = "hg19_refseq"
             db_path = UCSC_HG19
-            refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
         else:
             logger.error(f"无效的版本: {refversion}")
             return {"success": False, "error": f"无效的版本: {refversion}"}
 
-    # 检查数据库是否存在
-    reference_file = f"{db_path}/hg38.fa" if refversion == "hg38" else f"{db_path}/hg19.fa"
+    logger.info(f"使用 transvar refversion: {transvar_refversion}")
 
-    # transvar 会自动查找 .transvardb、.gene_idx、.trxn_idx 索引文件
-    if not os.path.exists(refseq_file):
-        logger.error(f"数据库文件不存在: {refseq_file}")
-        return {
-            "success": False,
-            "error": f"数据库文件不存在: {refseq_file}，请先运行构建脚本"
-        }
-
-    if not os.path.exists(reference_file):
-        logger.error(f"参考基因组文件不存在: {reference_file}")
-        return {
-            "success": False,
-            "error": f"参考基因组文件不存在: {reference_file}"
-        }
-
-    # 检查索引文件是否存在
-    transvardb_file = f"{refseq_file}.transvardb"
-    if not os.path.exists(transvardb_file):
-        logger.warning(f"索引文件不存在: {transvardb_file}")
-
-    logger.info(f"数据库路径: {db_path}, 参考基因组: {reference_file}")
-
-    # 构建 TransVar 命令
+    # 构建 TransVar 命令 - 使用旧版本格式，依赖 transvar config 配置
+    # 不指定文件路径，让 transvar 从配置文件读取
     cmd = [
         "transvar", mode,
         "-i", variant,
-        db_type, refseq_file,
-        "--reference", reference_file,
-        "--refversion", refversion
+        db_type,
+        "--refversion", transvar_refversion,
+        "-o", "/dev/stdout"
     ]
     logger.info(f"执行命令: {' '.join(cmd)}")
 
