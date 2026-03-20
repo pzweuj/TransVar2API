@@ -23,9 +23,8 @@ echo "  - Configuring hg19..."
 transvar config -k reference -v /data/transvar_db/refseq_hg19/hg19.fa --refversion hg19_refseq
 transvar config -k ucsc -v /data/transvar_db/refseq_hg19/ncbiRefSeq.txt.gz --refversion hg19_refseq
 
-# Verify setup
-echo "[3/4] Verifying databases..."
-transvar version
+# Verify setup - 移除不存在的 version 命令
+echo "[3/4] Database setup complete"
 
 # Start server
 echo "[4/4] Starting server on port $PORT..."
