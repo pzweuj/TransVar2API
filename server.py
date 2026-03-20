@@ -109,26 +109,27 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
         db_type = "--refseq"
         if refversion == "hg38":
             db_path = REFSEQ_HG38
-            refseq_file = f"{db_path}/hg38_refseq.gff.gz.transvardb"
+            refseq_file = f"{db_path}/hg38_refseq.gff.gz"
         elif refversion == "hg19":
             db_path = REFSEQ_HG19
-            refseq_file = f"{db_path}/hg19_refseq.gff.gz.transvardb"
+            refseq_file = f"{db_path}/hg19_refseq.gff.gz"
         else:
             return {"success": False, "error": f"无效的版本: {refversion}"}
     else:  # ucsc
         db_type = "--ucsc"
         if refversion == "hg38":
             db_path = UCSC_HG38
-            refseq_file = f"{db_path}/ncbiRefSeq.txt.gz.transvardb"
+            refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
         elif refversion == "hg19":
             db_path = UCSC_HG19
-            refseq_file = f"{db_path}/ncbiRefSeq.txt.gz.transvardb"
+            refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
         else:
             return {"success": False, "error": f"无效的版本: {refversion}"}
 
     # 检查数据库是否存在
     reference_file = f"{db_path}/hg38.fa" if refversion == "hg38" else f"{db_path}/hg19.fa"
 
+    # transvar 会自动查找 .transvardb、.gene_idx、.trxn_idx 索引文件
     if not os.path.exists(refseq_file):
         return {
             "success": False,
@@ -147,8 +148,7 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
         "-i", variant,
         db_type, refseq_file,
         "--reference", reference_file,
-        "--refversion", refversion,
-        "-o", "/dev/stdout"
+        "--refversion", refversion
     ]
 
     try:
