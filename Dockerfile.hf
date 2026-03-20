@@ -32,24 +32,32 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 RUN pip3 install --no-cache-dir transvar
 
 # 创建数据目录
-RUN mkdir -p /data/transvar_db/refseq_hg38 /data/transvar_db/refseq_hg19
+RUN mkdir -p /data/transvar_db/ucsc_hg38 /data/transvar_db/ucsc_hg19 \
+             /data/transvar_db/ncbi_refseq_hg38 /data/transvar_db/ncbi_refseq_hg19
 
-# ========== 下载参考基因组数据 ==========
-WORKDIR /data/transvar_db/refseq_hg38
-# hg38 参考基因组
+# ========== UCSC 数据库 ==========
+WORKDIR /data/transvar_db/ucsc_hg38
 RUN wget -q -O hg38.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz && \
     gunzip -f hg38.fa.gz && \
     samtools faidx hg38.fa
-# hg38 UCSC RefSeq 表格
 RUN wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/ncbiRefSeq.txt.gz
 
-WORKDIR /data/transvar_db/refseq_hg19
-# hg19 参考基因组
+WORKDIR /data/transvar_db/ucsc_hg19
 RUN wget -q -O hg19.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz && \
     gunzip -f hg19.fa.gz && \
     samtools faidx hg19.fa
-# hg19 UCSC RefSeq 表格
 RUN wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/ncbiRefSeq.txt.gz
+
+# ========== NCBI RefSeq 数据库 (软链接 UCSC 的参考基因组) ==========
+WORKDIR /data/transvar_db/ncbi_refseq_hg38
+RUN ln -sf ../ucsc_hg38/hg38.fa ./hg38.fa && \
+    samtools faidx hg38.fa
+RUN wget -q -O hg38_refseq.gff.gz https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_genomic.gff.gz
+
+WORKDIR /data/transvar_db/ncbi_refseq_hg19
+RUN ln -sf ../ucsc_hg19/hg19.fa ./hg19.fa && \
+    samtools faidx hg19.fa
+RUN wget -q -O hg19_refseq.gff.gz https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh37_latest/refseq_identifiers/GRCh37_latest_genomic.gff.gz
 
 # 设置启动脚本权限
 WORKDIR /app

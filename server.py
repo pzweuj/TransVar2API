@@ -32,8 +32,12 @@ app.add_middleware(
 
 # 数据库路径配置
 DB_PATH = os.getenv("TRANSVAR_DB_PATH", "/data/transvar_db")
-HG38_REFSEQ = f"{DB_PATH}/refseq_hg38"
-HG19_REFSEQ = f"{DB_PATH}/refseq_hg19"
+# UCSC 数据库
+UCSC_HG38 = f"{DB_PATH}/ucsc_hg38"
+UCSC_HG19 = f"{DB_PATH}/ucsc_hg19"
+# NCBI RefSeq 数据库
+REFSEQ_HG38 = f"{DB_PATH}/ncbi_refseq_hg38"
+REFSEQ_HG19 = f"{DB_PATH}/ncbi_refseq_hg19"
 
 
 class AnnotationRequest(BaseModel):
@@ -87,19 +91,34 @@ def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
             "error": f"无效的模式: {mode}，支持的模式: {', '.join(valid_modes)}"
         }
 
-    # 选择数据库路径
-    if "hg38" in refversion:
-        db_path = HG38_REFSEQ
+    # 选择数据库路径和类型
+    # UCSC: hg38_refseq, hg19_refseq
+    # NCBI RefSeq: hg38_ncbi_refseq, hg19_ncbi_refseq
+    if "ncbi_refseq" in refversion:
+        db_type = "--refseq"
+        if "hg38" in refversion:
+            db_path = REFSEQ_HG38
+            refseq_file = f"{db_path}/hg38_refseq.gff.gz"
+        elif "hg19" in refversion:
+            db_path = REFSEQ_HG19
+            refseq_file = f"{db_path}/hg19_refseq.gff.gz"
+        else:
+            return {"success": False, "error": f"无效的版本: {refversion}"}
+    elif "hg38" in refversion:
+        db_type = "--ucsc"
+        db_path = UCSC_HG38
+        refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
     elif "hg19" in refversion:
-        db_path = HG19_REFSEQ
+        db_type = "--ucsc"
+        db_path = UCSC_HG19
+        refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
     else:
         return {
             "success": False,
-            "error": f"无效的参考基因组版本: {refversion}，支持的版本: hg38_refseq, hg19_refseq"
+            "error": f"无效的参考基因组版本: {refversion}，支持的版本: hg38_refseq, hg19_refseq, hg38_ncbi_refseq, hg19_ncbi_refseq"
         }
 
     # 检查数据库是否存在
-    refseq_file = f"{db_path}/ncbiRefSeq.txt.gz"
     reference_file = f"{db_path}/hg38.fa" if "hg38" in refversion else f"{db_path}/hg19.fa"
 
     if not os.path.exists(refseq_file):
@@ -114,22 +133,29 @@ def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
             "error": f"参考基因组文件不存在: {reference_file}"
         }
 
-    # 构建 TransVar 命令 (使用 --ucsc 配合 UCSC 数据库)
+    # 构建 TransVar 命令
     cmd = [
         "transvar", mode,
         "-i", variant,
-        "--ucsc",
+        db_type,
         "--refversion", refversion,
         "-o", "/dev/stdout"
     ]
 
     try:
+        # 设置环境变量，确保 transvar 能找到配置文件和数据库
+        env = {
+            **os.environ,
+            "TRANSVAR_DB_PATH": db_path,
+            "HOME": os.path.expanduser("~")
+        }
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
             timeout=60,
-            env={**os.environ, "TRANSVAR_DB_PATH": db_path}
+            env=env,
+            cwd="/app"  # 在工作目录下运行
         )
 
         output = result.stdout
