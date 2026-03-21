@@ -106,10 +106,10 @@ RUN echo "Building NCBI hg19 transvar index..." && \
 
 # 验证索引文件
 RUN echo "Verifying index files..." && \
-    ls -la /data/transvar_db/ucsc_hg38/*.transvardb && \
-    ls -la /data/transvar_db/ucsc_hg19/*.transvardb && \
-    ls -la /data/transvar_db/ncbi_refseq_hg38/*.transvardb && \
-    ls -la /data/transvar_db/ncbi_refseq_hg19/*.transvardb
+    echo "UCSC hg38:" && ls -la /data/transvar_db/ucsc_hg38/*.transvardb && \
+    echo "UCSC hg19:" && ls -la /data/transvar_db/ucsc_hg19/*.transvardb && \
+    echo "NCBI hg38:" && ls -la /data/transvar_db/ncbi_refseq_hg38/*.transvardb && \
+    echo "NCBI hg19:" && ls -la /data/transvar_db/ncbi_refseq_hg19/*.transvardb
 
 # 设置启动脚本权限
 WORKDIR /app

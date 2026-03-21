@@ -2,6 +2,8 @@
 """
 TransVar API Service
 提供 HGVS 变异注释的 RESTful API 服务
+
+版本 1.3.0 - 使用配置文件管理数据库
 """
 
 import os
@@ -15,6 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 import uvicorn
+import configparser
 
 # 配置日志
 logging.basicConfig(
@@ -26,7 +29,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="TransVar API",
     description="HGVS 变异注释工具 TransVar 的 RESTful API 服务",
-    version="1.2.0"
+    version="1.3.0"
 )
 
 # 启用 CORS
@@ -40,12 +43,14 @@ app.add_middleware(
 
 # 数据库路径配置
 DB_PATH = os.getenv("TRANSVAR_DB_PATH", "/data/transvar_db")
-# UCSC 数据库
-UCSC_HG38 = f"{DB_PATH}/ucsc_hg38"
-UCSC_HG19 = f"{DB_PATH}/ucsc_hg19"
-# NCBI RefSeq 数据库
-REFSEQ_HG38 = f"{DB_PATH}/ncbi_refseq_hg38"
-REFSEQ_HG19 = f"{DB_PATH}/ncbi_refseq_hg19"
+
+# refversion 名称映射: (refversion, source) -> config_section_name
+REFVERSION_MAP = {
+    ("hg38", "ucsc"): "hg38_ucsc",
+    ("hg19", "ucsc"): "hg19_ucsc",
+    ("hg38", "ncbi_refseq"): "hg38_ncbi",
+    ("hg19", "ncbi_refseq"): "hg19_ncbi",
+}
 
 
 class AnnotationRequest(BaseModel):
@@ -64,7 +69,7 @@ class AnnotationResponse(BaseModel):
     mode: str
     sources: List[str] = []
     results: Optional[List[Dict[str, Any]]] = None
-    result: Optional[str] = None  # 兼容旧版，合并后的结果
+    result: Optional[str] = None
     error: Optional[str] = None
     raw_output: Optional[str] = None
 
@@ -74,55 +79,18 @@ class BatchAnnotationRequest(BaseModel):
     variants: List[str] = Field(..., description="变异列表")
     refversion: str = Field(default="hg38", description="参考基因组版本")
     mode: str = Field(default="panno", description="注释模式")
-    sources: List[str] = Field(default=["ucsc"], description="数据库来源: ucsc 和/或 ncbi_refseq")
+    sources: List[str] = Field(default=["ucsc"], description="数据库来源")
 
 
-class DatabaseInfo(BaseModel):
-    """数据库信息模型"""
-    hg38: Dict[str, Any]
-    hg19: Dict[str, Any]
-
-
-def get_db_paths(refversion: str, source: str) -> Dict[str, str]:
-    """
-    获取数据库文件路径
-
-    Args:
-        refversion: 参考基因组版本 (hg38 或 hg19)
-        source: 数据库来源 (ucsc 或 ncbi_refseq)
-
-    Returns:
-        包含 reference 和 annotation 文件路径的字典
-    """
-    if source == "ncbi_refseq":
-        if refversion == "hg38":
-            db_dir = REFSEQ_HG38
-            annotation_file = f"{db_dir}/hg38_refseq.gff.gz"
-        else:  # hg19
-            db_dir = REFSEQ_HG19
-            annotation_file = f"{db_dir}/hg19_refseq.gff.gz"
-        reference_file = f"{db_dir}/{refversion}.fa"
-        db_type_flag = "--refseq"
-    else:  # ucsc
-        if refversion == "hg38":
-            db_dir = UCSC_HG38
-        else:  # hg19
-            db_dir = UCSC_HG19
-        annotation_file = f"{db_dir}/ncbiRefSeq.txt.gz"
-        reference_file = f"{db_dir}/{refversion}.fa"
-        db_type_flag = "--ucsc"
-
-    return {
-        "reference": reference_file,
-        "annotation": annotation_file,
-        "db_type_flag": db_type_flag,
-        "db_dir": db_dir
-    }
+def get_refversion_name(refversion: str, source: str) -> str:
+    """获取配置文件中的 refversion 名称"""
+    key = (refversion, source)
+    return REFVERSION_MAP.get(key, f"{refversion}_{source}")
 
 
 def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc") -> Dict[str, Any]:
     """
-    执行 TransVar 命令 - 直接指定所有参数，不依赖配置文件
+    执行 TransVar 命令
 
     Args:
         variant: 变异描述
@@ -153,33 +121,15 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             "error": f"无效的数据库来源: {source}，支持的来源: {', '.join(valid_sources)}"
         }
 
-    # 获取数据库路径
-    db_paths = get_db_paths(refversion, source)
+    # 获取 refversion 名称
+    refversion_name = get_refversion_name(refversion, source)
 
-    # 检查文件是否存在
-    if not os.path.exists(db_paths["reference"]):
-        logger.error(f"参考基因组文件不存在: {db_paths['reference']}")
-        return {
-            "success": False,
-            "error": f"参考基因组文件不存在: {db_paths['reference']}"
-        }
-
-    if not os.path.exists(db_paths["annotation"]):
-        logger.error(f"注释数据库文件不存在: {db_paths['annotation']}")
-        return {
-            "success": False,
-            "error": f"注释数据库文件不存在: {db_paths['annotation']}"
-        }
-
-    # 构建 TransVar 命令 - 直接指定所有参数
-    # 注意: --refversion 是必需的，使用自定义名称如 hg38_ucsc, hg19_ncbi 等
-    refversion_name = f"{refversion}_{source.replace('ncbi_refseq', 'ncbi')}"
-
+    # 构建 TransVar 命令
+    # 使用 --refversion 指定配置文件中的 section
+    # 命令格式: transvar panno -i "PIK3CA:p.E545K" --refversion hg38_ucsc -o /dev/stdout
     cmd = [
         "transvar", mode,
         "-i", variant,
-        db_paths["db_type_flag"], db_paths["annotation"],
-        "--reference", db_paths["reference"],
         "--refversion", refversion_name,
         "-o", "/dev/stdout"
     ]
@@ -252,34 +202,6 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
         }
 
 
-def parse_transvar_output(output: str) -> Dict[str, Any]:
-    """
-    解析 TransVar 输出
-    """
-    lines = output.strip().split('\n')
-    parsed = {
-        "input": "",
-        "gene": "",
-        "transcript": "",
-        "variation": "",
-        "interpretation": ""
-    }
-
-    for line in lines:
-        if line.startswith('input'):
-            parsed["input"] = line.split(':', 1)[1].strip()
-        elif line.startswith('gene'):
-            parsed["gene"] = line.split(':', 1)[1].strip()
-        elif line.startswith('transcript'):
-            parsed["transcript"] = line.split(':', 1)[1].strip()
-        elif line.startswith('variation'):
-            parsed["variation"] = line.split(':', 1)[1].strip()
-        elif line.startswith('interpretation'):
-            parsed["interpretation"] = line.split(':', 1)[1].strip()
-
-    return parsed
-
-
 @app.get("/", response_class=HTMLResponse)
 async def home():
     """返回 Web 界面"""
@@ -291,34 +213,17 @@ async def home():
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>TransVar HGVS 注释工具</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
             padding: 20px;
         }
-        .container {
-            max-width: 900px;
-            margin: 0 auto;
-        }
-        .header {
-            text-align: center;
-            color: white;
-            margin-bottom: 30px;
-        }
-        .header h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-        .header p {
-            font-size: 1.1em;
-            opacity: 0.9;
-        }
+        .container { max-width: 900px; margin: 0 auto; }
+        .header { text-align: center; color: white; margin-bottom: 30px; }
+        .header h1 { font-size: 2.5em; margin-bottom: 10px; }
+        .header p { font-size: 1.1em; opacity: 0.9; }
         .card {
             background: white;
             border-radius: 16px;
@@ -326,15 +231,8 @@ async def home():
             box-shadow: 0 10px 40px rgba(0,0,0,0.2);
             margin-bottom: 20px;
         }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        label {
-            display: block;
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: #333;
-        }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 8px; color: #333; }
         input[type="text"], select, textarea {
             width: 100%;
             padding: 12px 16px;
@@ -343,31 +241,11 @@ async def home():
             font-size: 16px;
             transition: border-color 0.3s;
         }
-        input:focus, select:focus, textarea:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        .checkbox-group {
-            display: flex;
-            gap: 20px;
-            margin-top: 8px;
-        }
-        .checkbox-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            cursor: pointer;
-        }
-        .checkbox-item input[type="checkbox"] {
-            width: 18px;
-            height: 18px;
-            cursor: pointer;
-        }
-        .checkbox-item label {
-            margin: 0;
-            cursor: pointer;
-            font-weight: normal;
-        }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #667eea; }
+        .checkbox-group { display: flex; gap: 20px; margin-top: 8px; }
+        .checkbox-item { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .checkbox-item input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
+        .checkbox-item label { margin: 0; cursor: pointer; font-weight: normal; }
         .btn {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -379,35 +257,12 @@ async def home():
             cursor: pointer;
             transition: transform 0.2s, box-shadow 0.2s;
         }
-        .btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
-        }
-        .btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-        .result {
-            margin-top: 20px;
-            padding: 20px;
-            border-radius: 8px;
-            display: none;
-        }
-        .result.success {
-            background: #d4edda;
-            border: 1px solid #c3e6cb;
-            display: block;
-        }
-        .result.error {
-            background: #f8d7da;
-            border: 1px solid #f5c6cb;
-            display: block;
-        }
-        .result-title {
-            font-weight: 600;
-            margin-bottom: 10px;
-            font-size: 1.1em;
-        }
+        .btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4); }
+        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+        .result { margin-top: 20px; padding: 20px; border-radius: 8px; display: none; }
+        .result.success { background: #d4edda; border: 1px solid #c3e6cb; display: block; }
+        .result.error { background: #f8d7da; border: 1px solid #f5c6cb; display: block; }
+        .result-title { font-weight: 600; margin-bottom: 10px; font-size: 1.1em; }
         .result-content {
             font-family: 'Courier New', monospace;
             white-space: pre-wrap;
@@ -418,29 +273,11 @@ async def home():
             max-height: 500px;
             overflow-y: auto;
         }
-        .source-label {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: bold;
-            margin-right: 8px;
-        }
-        .source-ucsc {
-            background: #e3f2fd;
-            color: #1565c0;
-        }
-        .source-ncbi {
-            background: #f3e5f5;
-            color: #7b1fa2;
-        }
-        .examples {
-            margin-top: 20px;
-        }
-        .examples h3 {
-            color: #333;
-            margin-bottom: 15px;
-        }
+        .source-label { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 8px; }
+        .source-ucsc { background: #e3f2fd; color: #1565c0; }
+        .source-ncbi { background: #f3e5f5; color: #7b1fa2; }
+        .examples { margin-top: 20px; }
+        .examples h3 { color: #333; margin-bottom: 15px; }
         .example-item {
             display: inline-block;
             background: #f0f0f0;
@@ -451,14 +288,8 @@ async def home():
             transition: background 0.2s;
             font-size: 14px;
         }
-        .example-item:hover {
-            background: #e0e0e0;
-        }
-        .tabs {
-            display: flex;
-            border-bottom: 2px solid #e0e0e0;
-            margin-bottom: 20px;
-        }
+        .example-item:hover { background: #e0e0e0; }
+        .tabs { display: flex; border-bottom: 2px solid #e0e0e0; margin-bottom: 20px; }
         .tab {
             padding: 12px 24px;
             cursor: pointer;
@@ -466,20 +297,9 @@ async def home():
             margin-bottom: -2px;
             transition: all 0.2s;
         }
-        .tab.active {
-            border-bottom-color: #667eea;
-            color: #667eea;
-            font-weight: 600;
-        }
-        .batch-input {
-            width: 100%;
-            min-height: 150px;
-            font-family: 'Courier New', monospace;
-        }
-        .loading {
-            text-align: center;
-            padding: 20px;
-        }
+        .tab.active { border-bottom-color: #667eea; color: #667eea; font-weight: 600; }
+        .batch-input { width: 100%; min-height: 150px; font-family: 'Courier New', monospace; }
+        .loading { text-align: center; padding: 20px; }
         .spinner {
             border: 3px solid #f3f3f3;
             border-top: 3px solid #667eea;
@@ -489,40 +309,10 @@ async def home():
             animation: spin 1s linear infinite;
             margin: 0 auto;
         }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-        .info-box {
-            background: #e7f3ff;
-            border-left: 4px solid #2196F3;
-            padding: 15px;
-            margin-bottom: 20px;
-            border-radius: 4px;
-        }
-        .info-box h4 {
-            color: #1976D2;
-            margin-bottom: 8px;
-        }
-        .info-box p {
-            color: #555;
-            font-size: 14px;
-        }
-        .db-status {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 12px;
-            margin-left: 8px;
-        }
-        .db-available {
-            background: #c8e6c9;
-            color: #2e7d32;
-        }
-        .db-unavailable {
-            background: #ffcdd2;
-            color: #c62828;
-        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .info-box { background: #e7f3ff; border-left: 4px solid #2196F3; padding: 15px; margin-bottom: 20px; border-radius: 4px; }
+        .info-box h4 { color: #1976D2; margin-bottom: 8px; }
+        .info-box p { color: #555; font-size: 14px; }
     </style>
 </head>
 <body>
@@ -531,25 +321,21 @@ async def home():
             <h1>TransVar HGVS 注释工具</h1>
             <p>支持 UCSC RefSeq 和 NCBI RefSeq 数据库进行变异注释</p>
         </div>
-
         <div class="card">
             <div class="info-box">
                 <h4>简介</h4>
-                <p>TransVar 是一个强大的 HGVS 变异注释工具，支持蛋白 (p.)、cDNA (c.) 和基因组 (g.) 水平的变异注释。您可以选择使用 UCSC RefSeq 或 NCBI RefSeq 转录本数据库，或同时使用两者进行注释。</p>
+                <p>TransVar 是一个强大的 HGVS 变异注释工具，支持蛋白 (p.)、cDNA (c.) 和基因组 (g.) 水平的变异注释。</p>
             </div>
-
             <div class="tabs">
                 <div class="tab active" onclick="switchTab('single')">单个注释</div>
                 <div class="tab" onclick="switchTab('batch')">批量注释</div>
-                <div class="tab" onclick="switchTab('info')">数据库信息</div>
+                <div class="tab" onclick="switchTab('info')">调试信息</div>
             </div>
-
             <div id="single-form">
                 <div class="form-group">
                     <label for="variant">变异描述 (HGVS)</label>
-                    <input type="text" id="variant" placeholder="例如: PIK3CA:p.E545K 或 NM_006218.4:c.1633G>A">
+                    <input type="text" id="variant" placeholder="例如: PIK3CA:p.E545K">
                 </div>
-
                 <div class="form-group">
                     <label for="refversion">参考基因组版本</label>
                     <select id="refversion">
@@ -557,17 +343,14 @@ async def home():
                         <option value="hg19">hg19 (GRCh37)</option>
                     </select>
                 </div>
-
                 <div class="form-group">
                     <label for="mode">注释模式</label>
                     <select id="mode">
-                        <option value="panno">蛋白注释 (p.) 例如: p.E545K</option>
-                        <option value="canno">cDNA注释 (c.) 例如: c.1633G>A</option>
-                        <option value="ganno">基因组注释 (g.) 例如: g.178921852G>A</option>
-                        <option value="codonsearch">密码子搜索 例如: KRAS:c.12GTT></option>
+                        <option value="panno">蛋白注释 (p.)</option>
+                        <option value="canno">cDNA注释 (c.)</option>
+                        <option value="ganno">基因组注释 (g.)</option>
                     </select>
                 </div>
-
                 <div class="form-group">
                     <label>数据库来源 (可多选)</label>
                     <div class="checkbox-group">
@@ -581,26 +364,20 @@ async def home():
                         </div>
                     </div>
                 </div>
-
                 <button class="btn" onclick="annotate()">提交注释</button>
-
                 <div class="examples">
                     <h3>示例:</h3>
                     <span class="example-item" onclick="setVariant('PIK3CA:p.E545K')">PIK3CA:p.E545K</span>
                     <span class="example-item" onclick="setVariant('EGFR:p.L858R')">EGFR:p.L858R</span>
                     <span class="example-item" onclick="setVariant('BRCA1:p.C61G')">BRCA1:p.C61G</span>
-                    <span class="example-item" onclick="setVariant('NM_006218.4:c.1633G>A')">NM_006218.4:c.1633G>A</span>
                     <span class="example-item" onclick="setVariant('TP53:p.R273H')">TP53:p.R273H</span>
-                    <span class="example-item" onclick="setVariant('KRAS:c.12GTT>TTC')">KRAS:c.12GTT>TTC</span>
                 </div>
             </div>
-
             <div id="batch-form" style="display:none;">
                 <div class="form-group">
                     <label for="batch-variants">批量变异 (每行一个)</label>
-                    <textarea id="batch-variants" class="batch-input" placeholder="PIK3CA:p.E545K&#10;EGFR:p.L858R&#10;BRCA1:p.C61G"></textarea>
+                    <textarea id="batch-variants" class="batch-input" placeholder="PIK3CA:p.E545K&#10;EGFR:p.L858R"></textarea>
                 </div>
-
                 <div class="form-group">
                     <label for="batch-refversion">参考基因组版本</label>
                     <select id="batch-refversion">
@@ -608,17 +385,14 @@ async def home():
                         <option value="hg19">hg19 (GRCh37)</option>
                     </select>
                 </div>
-
                 <div class="form-group">
                     <label for="batch-mode">注释模式</label>
                     <select id="batch-mode">
                         <option value="panno">蛋白注释 (p.)</option>
                         <option value="canno">cDNA注释 (c.)</option>
                         <option value="ganno">基因组注释 (g.)</option>
-                        <option value="codonsearch">密码子搜索</option>
                     </select>
                 </div>
-
                 <div class="form-group">
                     <label>数据库来源 (可多选)</label>
                     <div class="checkbox-group">
@@ -632,18 +406,12 @@ async def home():
                         </div>
                     </div>
                 </div>
-
                 <button class="btn" onclick="batchAnnotate()">批量提交</button>
             </div>
-
             <div id="info-form" style="display:none;">
-                <div id="db-info">
-                    <p>点击"查看数据库信息"按钮获取详细信息</p>
-                </div>
-                <button class="btn" onclick="getDbInfo()">查看数据库信息</button>
-                <button class="btn" style="margin-left:10px;background:linear-gradient(135deg, #f44336 0%, #c62828 100%);" onclick="getDebugInfo()">调试信息</button>
+                <button class="btn" onclick="getDebugInfo()">获取调试信息</button>
+                <div id="db-info" style="margin-top:20px;"></div>
             </div>
-
             <div id="result" class="result"></div>
             <div id="loading" class="loading" style="display:none;">
                 <div class="spinner"></div>
@@ -651,91 +419,55 @@ async def home():
             </div>
         </div>
     </div>
-
     <script>
         let currentTab = 'single';
-
         function switchTab(tab) {
             currentTab = tab;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab')[['single', 'batch', 'info'].indexOf(tab)].classList.add('active');
-
             document.getElementById('single-form').style.display = tab === 'single' ? 'block' : 'none';
             document.getElementById('batch-form').style.display = tab === 'batch' ? 'block' : 'none';
             document.getElementById('info-form').style.display = tab === 'info' ? 'block' : 'none';
-
             document.getElementById('result').style.display = 'none';
         }
-
-        function setVariant(variant) {
-            document.getElementById('variant').value = variant;
-        }
-
+        function setVariant(v) { document.getElementById('variant').value = v; }
         function getSources(prefix) {
             const sources = [];
-            if (document.getElementById(prefix + '-source-ucsc').checked) {
-                sources.push('ucsc');
-            }
-            if (document.getElementById(prefix + '-source-ncbi').checked) {
-                sources.push('ncbi_refseq');
-            }
+            if (document.getElementById(prefix + '-source-ucsc').checked) sources.push('ucsc');
+            if (document.getElementById(prefix + '-source-ncbi').checked) sources.push('ncbi_refseq');
             return sources.length > 0 ? sources : ['ucsc'];
         }
-
         function showResult(success, message) {
             const resultDiv = document.getElementById('result');
             resultDiv.className = 'result ' + (success ? 'success' : 'error');
             resultDiv.innerHTML = '<div class="result-title">' + (success ? '注释结果' : '错误') + '</div><div class="result-content">' + message + '</div>';
             resultDiv.style.display = 'block';
         }
-
         function formatSourceLabel(source) {
             const labelClass = source === 'ucsc' ? 'source-ucsc' : 'source-ncbi';
             const labelName = source === 'ucsc' ? 'UCSC' : 'NCBI';
             return '<span class="source-label ' + labelClass + '">' + labelName + '</span>';
         }
-
         async function annotate() {
             const variant = document.getElementById('variant').value.trim();
+            if (!variant) { showResult(false, '请输入变异描述'); return; }
             const refversion = document.getElementById('refversion').value;
             const mode = document.getElementById('mode').value;
             const sources = getSources('');
-
-            if (!variant) {
-                showResult(false, '请输入变异描述');
-                return;
-            }
-
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
-
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 150000);
-
             try {
                 const response = await fetch('/api/annotate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({variant, refversion, mode, sources}),
-                    signal: controller.signal
+                    body: JSON.stringify({variant, refversion, mode, sources})
                 });
-                clearTimeout(timeoutId);
-
-                if (!response.ok) {
-                    throw new Error('HTTP ' + response.status + ': ' + response.statusText);
-                }
-
                 const data = await response.json();
-
                 if (data.success && data.results) {
                     let output = '';
                     data.results.forEach(r => {
                         output += formatSourceLabel(r.source) + '\\n';
-                        if (r.success) {
-                            output += r.result || '无输出';
-                        } else {
-                            output += '错误: ' + (r.error || '注释失败');
-                        }
+                        output += r.success ? (r.result || '无输出') : ('错误: ' + (r.error || '注释失败'));
                         output += '\\n\\n' + '─'.repeat(60) + '\\n\\n';
                     });
                     showResult(true, output);
@@ -743,31 +475,19 @@ async def home():
                     showResult(false, data.error || '注释失败');
                 }
             } catch (e) {
-                clearTimeout(timeoutId);
-                if (e.name === 'AbortError') {
-                    showResult(false, '请求超时（150秒），服务器可能正在处理复杂请求，请稍后重试');
-                } else {
-                    showResult(false, '请求失败: ' + e.message);
-                }
+                showResult(false, '请求失败: ' + e.message);
             } finally {
                 document.getElementById('loading').style.display = 'none';
             }
         }
-
         async function batchAnnotate() {
             const variants = document.getElementById('batch-variants').value.trim().split('\\n').filter(v => v.trim());
+            if (!variants.length) { showResult(false, '请输入变异列表'); return; }
             const refversion = document.getElementById('batch-refversion').value;
             const mode = document.getElementById('batch-mode').value;
             const sources = getSources('batch-');
-
-            if (!variants.length) {
-                showResult(false, '请输入变异列表');
-                return;
-            }
-
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
-
             try {
                 const response = await fetch('/api/batch_annotate', {
                     method: 'POST',
@@ -775,86 +495,42 @@ async def home():
                     body: JSON.stringify({variants, refversion, mode, sources})
                 });
                 const data = await response.json();
-
-                if (data.success) {
-                    let output = '';
-                    data.results.forEach(r => {
-                        output += '输入: ' + r.input + '\\n';
-                        if (r.results) {
-                            r.results.forEach(sr => {
-                                output += formatSourceLabel(sr.source) + ' ';
-                                output += (sr.success ? (sr.result || '无输出') : '错误: ' + (sr.error || '失败'));
-                                output += '\\n';
-                            });
-                        } else {
-                            output += '结果: ' + (r.result || r.error || '无输出');
-                        }
-                        output += '---\\n';
-                    });
-                    showResult(true, output);
-                } else {
-                    showResult(false, data.error || '批量注释失败');
-                }
+                let output = '';
+                data.results.forEach(r => {
+                    output += '输入: ' + r.input + '\\n';
+                    if (r.results) {
+                        r.results.forEach(sr => {
+                            output += formatSourceLabel(sr.source) + ' ' + (sr.success ? (sr.result || '无输出') : ('错误: ' + sr.error)) + '\\n';
+                        });
+                    }
+                    output += '---\\n';
+                });
+                showResult(true, output);
             } catch (e) {
                 showResult(false, '请求失败: ' + e.message);
             } finally {
                 document.getElementById('loading').style.display = 'none';
             }
         }
-
-        async function getDbInfo() {
-            try {
-                const response = await fetch('/api/db_info');
-                const data = await response.json();
-
-                let html = '<h3>数据库状态</h3>';
-
-                html += '<h4 style="margin-top:15px;color:#333;">hg38 (GRCh38)</h4><ul>';
-                html += '<li><strong>UCSC RefSeq:</strong> ' + (data.hg38.ucsc_available ? '<span class="db-status db-available">可用</span>' : '<span class="db-status db-unavailable">不可用</span>') + '</li>';
-                html += '<li><strong>NCBI RefSeq:</strong> ' + (data.hg38.ncbi_available ? '<span class="db-status db-available">可用</span>' : '<span class="db-status db-unavailable">不可用</span>') + '</li>';
-                html += '</ul>';
-
-                html += '<h4 style="margin-top:15px;color:#333;">hg19 (GRCh37)</h4><ul>';
-                html += '<li><strong>UCSC RefSeq:</strong> ' + (data.hg19.ucsc_available ? '<span class="db-status db-available">可用</span>' : '<span class="db-status db-unavailable">不可用</span>') + '</li>';
-                html += '<li><strong>NCBI RefSeq:</strong> ' + (data.hg19.ncbi_available ? '<span class="db-status db-available">可用</span>' : '<span class="db-status db-unavailable">不可用</span>') + '</li>';
-                html += '</ul>';
-
-                document.getElementById('db-info').innerHTML = html;
-            } catch (e) {
-                document.getElementById('db-info').innerHTML = '<p style="color:red">获取失败: ' + e.message + '</p>';
-            }
-        }
-
         async function getDebugInfo() {
             try {
                 const response = await fetch('/api/debug');
                 const data = await response.json();
-
                 let html = '<h3>调试信息</h3>';
                 html += '<p><strong>服务:</strong> ' + data.service + '</p>';
                 html += '<p><strong>数据库路径:</strong> ' + data.db_path + '</p>';
-                html += '<p><strong>Home 目录:</strong> ' + data.home_dir + '</p>';
                 html += '<p><strong>TransVar 版本:</strong> ' + data.transvar_version + '</p>';
-
-                if (data.transvar_config_files) {
-                    html += '<h4 style="margin-top:15px;">配置文件状态</h4>';
-                    html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.transvar_config_files, null, 2) + '</pre>';
+                if (data.config_content) {
+                    html += '<h4 style="margin-top:15px;">配置文件内容</h4>';
+                    html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + data.config_content + '</pre>';
                 }
-
-                if (data.transvar_tests) {
-                    html += '<h4 style="margin-top:15px;">TransVar 测试结果</h4>';
-                    html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.transvar_tests, null, 2) + '</pre>';
+                if (data.test_result) {
+                    html += '<h4 style="margin-top:15px;">测试结果</h4>';
+                    html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.test_result, null, 2) + '</pre>';
                 }
-
-                html += '<h4 style="margin-top:15px;">hg38 文件状态</h4>';
-                html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.hg38, null, 2) + '</pre>';
-
-                html += '<h4 style="margin-top:15px;">hg19 文件状态</h4>';
-                html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.hg19, null, 2) + '</pre>';
-
                 document.getElementById('db-info').innerHTML = html;
             } catch (e) {
-                document.getElementById('db-info').innerHTML = '<p style="color:red">获取调试信息失败: ' + e.message + '</p>';
+                document.getElementById('db-info').innerHTML = '<p style="color:red">获取失败: ' + e.message + '</p>';
             }
         }
     </script>
@@ -871,127 +547,15 @@ async def health_check():
 
 @app.get("/api/debug")
 async def debug_info():
-    """调试接口 - 检查服务状态和数据库"""
+    """调试接口"""
     logger.info("调试接口被调用")
 
-    def check_db_files(refversion):
-        if refversion == "hg38":
-            ucsc_path = UCSC_HG38
-            ncbi_path = REFSEQ_HG38
-        else:
-            ucsc_path = UCSC_HG19
-            ncbi_path = REFSEQ_HG19
-
-        files_status = {}
-
-        # UCSC 文件
-        ucsc_refseq = f"{ucsc_path}/ncbiRefSeq.txt.gz"
-        ucsc_ref = f"{ucsc_path}/{refversion}.fa"
-        ucsc_db = f"{ucsc_path}/ncbiRefSeq.txt.gz.transvardb"
-        ucsc_gene_idx = f"{ucsc_path}/ncbiRefSeq.txt.gz.gene_idx"
-        ucsc_trxn_idx = f"{ucsc_path}/ncbiRefSeq.txt.gz.trxn_idx"
-
-        files_status["ucsc"] = {
-            "refseq_file": {"path": ucsc_refseq, "exists": os.path.exists(ucsc_refseq)},
-            "reference_file": {"path": ucsc_ref, "exists": os.path.exists(ucsc_ref)},
-            "transvardb": {"path": ucsc_db, "exists": os.path.exists(ucsc_db)},
-            "gene_idx": {"path": ucsc_gene_idx, "exists": os.path.exists(ucsc_gene_idx)},
-            "trxn_idx": {"path": ucsc_trxn_idx, "exists": os.path.exists(ucsc_trxn_idx)}
-        }
-
-        # NCBI 文件
-        ncbi_refseq = f"{ncbi_path}/{refversion}_refseq.gff.gz"
-        ncbi_ref = f"{ncbi_path}/{refversion}.fa"
-        ncbi_db = f"{ncbi_path}/{refversion}_refseq.gff.gz.transvardb"
-        ncbi_gene_idx = f"{ncbi_path}/{refversion}_refseq.gff.gz.gene_idx"
-        ncbi_trxn_idx = f"{ncbi_path}/{refversion}_refseq.gff.gz.trxn_idx"
-
-        files_status["ncbi_refseq"] = {
-            "refseq_file": {"path": ncbi_refseq, "exists": os.path.exists(ncbi_refseq)},
-            "reference_file": {"path": ncbi_ref, "exists": os.path.exists(ncbi_ref)},
-            "transvardb": {"path": ncbi_db, "exists": os.path.exists(ncbi_db)},
-            "gene_idx": {"path": ncbi_gene_idx, "exists": os.path.exists(ncbi_gene_idx)},
-            "trxn_idx": {"path": ncbi_trxn_idx, "exists": os.path.exists(ncbi_trxn_idx)}
-        }
-
-        return files_status
-
-    def check_transvar_config():
-        """检查 transvar 配置文件状态"""
-        home = os.path.expanduser("~")
-        config_paths = [
-            os.path.join(home, ".transvar.cfg"),
-            os.path.join(home, ".transvar", "transvar.cfg"),
-        ]
-
-        transvar_cfg = os.environ.get("TRANSVAR_CFG")
-        if transvar_cfg:
-            config_paths.insert(0, transvar_cfg)
-
-        config_status = {}
-        for path in config_paths:
-            if os.path.exists(path):
-                try:
-                    with open(path, 'r') as f:
-                        content = f.read()
-                    config_status[path] = {
-                        "exists": True,
-                        "size": len(content),
-                        "content_preview": content[:500] if content else "(empty)"
-                    }
-                except Exception as e:
-                    config_status[path] = {"exists": True, "error": str(e)}
-            else:
-                config_status[path] = {"exists": False}
-
-        return config_status
-
-    def test_transvar_command():
-        """测试 transvar 命令是否真正可用"""
-        test_results = {}
-
-        # 测试版本
-        try:
-            result = subprocess.run(
-                ["transvar", "--version"],
-                capture_output=True, text=True, timeout=10
-            )
-            version_info = result.stdout.strip() or result.stderr.strip()
-            test_results["version_check"] = {
-                "returncode": result.returncode,
-                "version": version_info,
-                "note": "exit code 1 is expected for --version"
-            }
-        except Exception as e:
-            test_results["version_check"] = {"error": str(e)}
-            return test_results
-
-        # 测试实际注释 - 使用直接指定参数的方式
-        try:
-            db_paths = get_db_paths("hg38", "ucsc")
-            result = subprocess.run(
-                [
-                    "transvar", "panno",
-                    "-i", "PIK3CA:p.E545K",
-                    "--ucsc", db_paths["annotation"],
-                    "--reference", db_paths["reference"],
-                    "--refversion", "hg38_ucsc",
-                    "-o", "/dev/stdout"
-                ],
-                capture_output=True, text=True, timeout=60,
-                env={**os.environ, "HOME": os.path.expanduser("~")},
-                cwd="/app"
-            )
-            test_results["annotation_test_hg38_ucsc"] = {
-                "returncode": result.returncode,
-                "stdout_length": len(result.stdout),
-                "stdout_preview": result.stdout[:500] if result.stdout else "",
-                "stderr_preview": result.stderr[:500] if result.stderr else ""
-            }
-        except Exception as e:
-            test_results["annotation_test_hg38_ucsc"] = {"error": str(e)}
-
-        return test_results
+    # 读取配置文件
+    config_content = ""
+    config_path = os.path.expanduser("~/.transvar.cfg")
+    if os.path.exists(config_path):
+        with open(config_path, 'r') as f:
+            config_content = f.read()
 
     # 检测 transvar 版本
     transvar_version = ""
@@ -1001,28 +565,38 @@ async def debug_info():
     except Exception as e:
         transvar_version = f"Error: {str(e)}"
 
+    # 测试注释
+    test_result = None
+    try:
+        result = subprocess.run(
+            ["transvar", "panno", "-i", "PIK3CA:p.E545K", "--refversion", "hg38_ucsc", "-o", "/dev/stdout"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "HOME": os.path.expanduser("~")},
+            cwd="/app"
+        )
+        test_result = {
+            "returncode": result.returncode,
+            "stdout_length": len(result.stdout),
+            "stdout_preview": result.stdout[:500] if result.stdout else "",
+            "stderr_preview": result.stderr[:500] if result.stderr else ""
+        }
+    except Exception as e:
+        test_result = {"error": str(e)}
+
     return {
         "service": "TransVar API",
         "db_path": DB_PATH,
-        "home_dir": os.path.expanduser("~"),
         "transvar_version": transvar_version,
-        "transvar_config_files": check_transvar_config(),
-        "transvar_tests": test_transvar_command(),
-        "hg38": check_db_files("hg38"),
-        "hg19": check_db_files("hg19")
+        "config_path": config_path,
+        "config_exists": os.path.exists(config_path),
+        "config_content": config_content,
+        "test_result": test_result
     }
 
 
 @app.post("/api/annotate", response_model=AnnotationResponse)
 async def annotate(request: AnnotationRequest):
-    """
-    单个变异注释接口
-
-    - **variant**: 变异描述 (如 PIK3CA:p.E545K)
-    - **refversion**: 参考基因组版本 (hg38 或 hg19)
-    - **mode**: 注释模式 (panno/canno/ganno/codonsearch)
-    - **sources**: 数据库来源列表 (ucsc, ncbi_refseq)
-    """
+    """单个变异注释接口"""
     logger.info(f"收到注释请求: variant={request.variant}, refversion={request.refversion}, mode={request.mode}, sources={request.sources}")
 
     sources = request.sources if request.sources else ["ucsc"]
@@ -1061,14 +635,7 @@ async def annotate(request: AnnotationRequest):
 
 @app.post("/api/batch_annotate")
 async def batch_annotate(request: BatchAnnotationRequest):
-    """
-    批量变异注释接口
-
-    - **variants**: 变异列表
-    - **refversion**: 参考基因组版本
-    - **mode**: 注释模式
-    - **sources**: 数据库来源列表
-    """
+    """批量变异注释接口"""
     sources = request.sources if request.sources else ["ucsc"]
     results = []
 
@@ -1099,29 +666,15 @@ async def batch_annotate(request: BatchAnnotationRequest):
 @app.get("/api/db_info")
 async def get_db_info():
     """获取数据库信息"""
-    def check_db(refversion):
-        if refversion == "hg38":
-            ucsc_path = UCSC_HG38
-            ncbi_path = REFSEQ_HG38
-        else:
-            ucsc_path = UCSC_HG19
-            ncbi_path = REFSEQ_HG19
-
-        ucsc_transvardb = f"{ucsc_path}/ncbiRefSeq.txt.gz.transvardb"
-        ncbi_transvardb = f"{ncbi_path}/{refversion}_refseq.gff.gz.transvardb"
-        reference_file = f"{ucsc_path}/{refversion}.fa"
-
-        return {
-            "ucsc_available": os.path.exists(ucsc_transvardb) and os.path.exists(reference_file),
-            "ncbi_available": os.path.exists(ncbi_transvardb) and os.path.exists(reference_file),
-            "ucsc_file": ucsc_transvardb,
-            "ncbi_file": ncbi_transvardb,
-            "reference_file": reference_file
-        }
-
     return {
-        "hg38": check_db("hg38"),
-        "hg19": check_db("hg19")
+        "hg38": {
+            "ucsc_available": os.path.exists(f"{DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.transvardb"),
+            "ncbi_available": os.path.exists(f"{DB_PATH}/ncbi_refseq_hg38/hg38_refseq.gff.gz.transvardb")
+        },
+        "hg19": {
+            "ucsc_available": os.path.exists(f"{DB_PATH}/ucsc_hg19/ncbiRefSeq.txt.gz.transvardb"),
+            "ncbi_available": os.path.exists(f"{DB_PATH}/ncbi_refseq_hg19/hg19_refseq.gff.gz.transvardb")
+        }
     }
 
 
