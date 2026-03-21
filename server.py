@@ -524,9 +524,27 @@ async def home():
                     html += '<h4 style="margin-top:15px;">配置文件内容</h4>';
                     html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + data.config_content + '</pre>';
                 }
-                if (data.test_result) {
+                if (data.db_status) {
+                    html += '<h4 style="margin-top:15px;">数据库状态</h4>';
+                    html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.db_status, null, 2) + '</pre>';
+                }
+                if (data.test_results) {
                     html += '<h4 style="margin-top:15px;">测试结果</h4>';
-                    html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.test_result, null, 2) + '</pre>';
+                    data.test_results.forEach(r => {
+                        html += '<div style="margin-bottom:10px;padding:10px;background:#f9f9f9;border-radius:4px;">';
+                        html += '<strong>' + r.test + '</strong><br>';
+                        html += '<span style="color:' + (r.returncode === 0 ? 'green' : 'red') + ';">Return code: ' + r.returncode + '</span><br>';
+                        if (r.stdout) {
+                            html += '<pre style="margin:5px 0;white-space:pre-wrap;font-size:11px;">' + r.stdout + '</pre>';
+                        }
+                        if (r.stderr) {
+                            html += '<pre style="margin:5px 0;color:orange;font-size:11px;">' + r.stderr + '</pre>';
+                        }
+                        if (r.error) {
+                            html += '<span style="color:red;">Error: ' + r.error + '</span>';
+                        }
+                        html += '</div>';
+                    });
                 }
                 document.getElementById('db-info').innerHTML = html;
             } catch (e) {
@@ -565,8 +583,24 @@ async def debug_info():
     except Exception as e:
         transvar_version = f"Error: {str(e)}"
 
-    # 测试注释
-    test_result = None
+    # 检查数据库文件状态
+    db_status = {
+        "ucsc_hg38": {
+            "transvardb_exists": os.path.exists(f"{DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.transvardb"),
+            "reference_exists": os.path.exists(f"{DB_PATH}/ucsc_hg38/hg38.fa"),
+            "fai_exists": os.path.exists(f"{DB_PATH}/ucsc_hg38/hg38.fa.fai"),
+            "gene_idx_exists": os.path.exists(f"{DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.gene_idx"),
+        },
+        "ncbi_hg38": {
+            "transvardb_exists": os.path.exists(f"{DB_PATH}/ncbi_refseq_hg38/hg38_refseq.gff.gz.transvardb"),
+            "reference_exists": os.path.exists(f"{DB_PATH}/ncbi_refseq_hg38/hg38.fa"),
+        }
+    }
+
+    # 测试注释 - 使用多个测试用例
+    test_results = []
+
+    # 测试1: PIK3CA:p.E545K
     try:
         result = subprocess.run(
             ["transvar", "panno", "-i", "PIK3CA:p.E545K", "--refversion", "hg38_ucsc", "-o", "/dev/stdout"],
@@ -574,14 +608,48 @@ async def debug_info():
             env={**os.environ, "HOME": os.path.expanduser("~")},
             cwd="/app"
         )
-        test_result = {
+        test_results.append({
+            "test": "PIK3CA:p.E545K (hg38_ucsc)",
             "returncode": result.returncode,
-            "stdout_length": len(result.stdout),
-            "stdout_preview": result.stdout[:500] if result.stdout else "",
-            "stderr_preview": result.stderr[:500] if result.stderr else ""
-        }
+            "stdout": result.stdout.strip() if result.stdout else "",
+            "stderr": result.stderr.strip()[:200] if result.stderr else ""
+        })
     except Exception as e:
-        test_result = {"error": str(e)}
+        test_results.append({"test": "PIK3CA:p.E545K", "error": str(e)})
+
+    # 测试2: 使用转录本ID
+    try:
+        result = subprocess.run(
+            ["transvar", "canno", "-i", "NM_006218.4:c.1633G>A", "--refversion", "hg38_ucsc", "-o", "/dev/stdout"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "HOME": os.path.expanduser("~")},
+            cwd="/app"
+        )
+        test_results.append({
+            "test": "NM_006218.4:c.1633G>A (hg38_ucsc)",
+            "returncode": result.returncode,
+            "stdout": result.stdout.strip() if result.stdout else "",
+            "stderr": result.stderr.strip()[:200] if result.stderr else ""
+        })
+    except Exception as e:
+        test_results.append({"test": "NM_006218.4:c.1633G>A", "error": str(e)})
+
+    # 测试3: EGFR
+    try:
+        result = subprocess.run(
+            ["transvar", "panno", "-i", "EGFR:p.L858R", "--refversion", "hg38_ucsc", "-o", "/dev/stdout"],
+            capture_output=True, text=True, timeout=60,
+            env={**os.environ, "HOME": os.path.expanduser("~")},
+            cwd="/app"
+        )
+        test_results.append({
+            "test": "EGFR:p.L858R (hg38_ucsc)",
+            "returncode": result.returncode,
+            "stdout": result.stdout.strip() if result.stdout else "",
+            "stderr": result.stderr.strip()[:200] if result.stderr else ""
+        })
+    except Exception as e:
+        test_results.append({"test": "EGFR:p.L858R", "error": str(e)})
 
     return {
         "service": "TransVar API",
@@ -590,7 +658,8 @@ async def debug_info():
         "config_path": config_path,
         "config_exists": os.path.exists(config_path),
         "config_content": config_content,
-        "test_result": test_result
+        "db_status": db_status,
+        "test_results": test_results
     }
 
 
