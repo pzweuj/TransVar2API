@@ -151,15 +151,27 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             cwd="/app"
         )
 
-        output = result.stdout
-        error = result.stderr
+        output = result.stderr
         logger.info(f"命令返回码: {result.returncode}")
         logger.info(f"标准输出长度: {len(output)} 字符")
         if error:
             logger.warning(f"标准错误: {error[:500]}")
 
+        # 检查输出行数，判断是否只有表头
+        output_lines = output.strip().split('\n') if output.strip() else []
+        has_data = len(output_lines) > 1
+
         if result.returncode == 0 and output.strip():
-            logger.info(f"执行成功")
+            if not has_data:
+                logger.warning(f"输出只有表头，没有数据行")
+                return {
+                    "success": True,
+                    "source": source,
+                    "result": output.strip(),
+                    "raw_output": output,
+                    "warning": "输出只有表头，未找到匹配的数据。可能原因：基因名不在数据库中或转录本不完整。"
+                }
+            logger.info(f"执行成功，输出 {len(output_lines)} 行")
             return {
                 "success": True,
                 "source": source,
@@ -463,14 +475,26 @@ async def home():
                     body: JSON.stringify({variant, refversion, mode, sources})
                 });
                 const data = await response.json();
-                if (data.success && data.results) {
-                    let output = '';
+                let output = '';
+                let hasWarning = false;
+
+                if (data.results) {
                     data.results.forEach(r => {
                         output += formatSourceLabel(r.source) + '\\n';
-                        output += r.success ? (r.result || '无输出') : ('错误: ' + (r.error || '注释失败'));
+                        if (r.success) {
+                            output += r.result || '(无输出)';
+                            if (r.warning) {
+                                output += '\\n\\n⚠️ ' + r.warning;
+                                hasWarning = true;
+                            }
+                        } else {
+                            output += '❌ 错误: ' + (r.error || '注释失败');
+                        }
                         output += '\\n\\n' + '─'.repeat(60) + '\\n\\n';
                     });
-                    showResult(true, output);
+                    // 如果所有结果都有警告或失败，显示警告颜色
+                    const allHaveWarnings = data.results.every(r => r.warning || !r.success);
+                    showResult(!allHaveWarnings, output);
                 } else {
                     showResult(false, data.error || '注释失败');
                 }
@@ -500,7 +524,14 @@ async def home():
                     output += '输入: ' + r.input + '\\n';
                     if (r.results) {
                         r.results.forEach(sr => {
-                            output += formatSourceLabel(sr.source) + ' ' + (sr.success ? (sr.result || '无输出') : ('错误: ' + sr.error)) + '\\n';
+                            output += formatSourceLabel(sr.source) + ' ';
+                            if (sr.success) {
+                                output += sr.result || '(无输出)';
+                                if (sr.warning) output += ' \\n⚠️ ' + sr.warning;
+                            } else {
+                                output += '❌ 错误: ' + (sr.error || '失败');
+                            }
+                            output += '\\n';
                         });
                     }
                     output += '---\\n';
@@ -651,6 +682,85 @@ async def debug_info():
     except Exception as e:
         test_results.append({"test": "EGFR:p.L858R", "error": str(e)})
 
+    # 测试4: 检查数据库中的基因
+    try:
+        # 使用 zgrep 检查 PIK3CA 是否在数据库中
+        result = subprocess.run(
+            ["sh", "-c", f"zgrep -m 5 'PIK3CA' {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz 2>/dev/null || echo 'Not found'"],
+            capture_output=True, text=True, timeout=30
+        )
+        test_results.append({
+            "test": "Check PIK3CA in database",
+            "stdout": result.stdout.strip()[:300] if result.stdout else ""
+        })
+    except Exception as e:
+        test_results.append({"test": "Check PIK3CA in database", "error": str(e)})
+
+    # 测试5: 查看 gene_idx 文件内容
+    try:
+        result = subprocess.run(
+            ["sh", "-c", f"head -20 {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.gene_idx 2>/dev/null || echo 'File not found'"],
+            capture_output=True, text=True, timeout=30
+        )
+        test_results.append({
+            "test": "Check gene_idx file",
+            "stdout": result.stdout.strip()[:500] if result.stdout else ""
+        })
+    except Exception as e:
+        test_results.append({"test": "Check gene_idx file", "error": str(e)})
+
+    # 测试6: 检查 UCSC 源文件中 PIK3CA 的状态
+    try:
+        result = subprocess.run(
+            ["sh", "-c", f"zcat {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz | grep -i 'PIK3CA' | head -5"],
+            capture_output=True, text=True, timeout=30
+        )
+        test_results.append({
+            "test": "Check PIK3CA in source file",
+            "stdout": result.stdout.strip()[:800] if result.stdout else "Not found"
+        })
+    except Exception as e:
+        test_results.append({"test": "Check PIK3CA in source file", "error": str(e)})
+
+    # 测试7: 检查 transvardb 文件内容
+    try:
+        result = subprocess.run(
+            ["sh", "-c", f"head -20 {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.transvardb 2>/dev/null || echo 'File not found'"],
+            capture_output=True, text=True, timeout=30
+        )
+        test_results.append({
+            "test": "Check transvardb content (first 20 lines)",
+            "stdout": result.stdout.strip()[:800] if result.stdout else ""
+        })
+    except Exception as e:
+        test_results.append({"test": "Check transvardb content", "error": str(e)})
+
+    # 测试8: 检查 transvardb 中是否有 PIK3CA
+    try:
+        result = subprocess.run(
+            ["sh", "-c", f"grep -i 'PIK3CA' {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.transvardb 2>/dev/null | head -5 || echo 'Not found'"],
+            capture_output=True, text=True, timeout=30
+        )
+        test_results.append({
+            "test": "Search PIK3CA in transvardb",
+            "stdout": result.stdout.strip()[:500] if result.stdout else "Not found"
+        })
+    except Exception as e:
+        test_results.append({"test": "Search PIK3CA in transvardb", "error": str(e)})
+
+    # 测试9: 统计 transvardb 中的基因数量
+    try:
+        result = subprocess.run(
+            ["sh", "-c", f"cut -f1 {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.transvardb 2>/dev/null | sort -u | wc -l"],
+            capture_output=True, text=True, timeout=30
+        )
+        test_results.append({
+            "test": "Count unique genes in transvardb",
+            "stdout": result.stdout.strip() if result.stdout else ""
+        })
+    except Exception as e:
+        test_results.append({"test": "Count genes in transvardb", "error": str(e)})
+
     return {
         "service": "TransVar API",
         "db_path": DB_PATH,
@@ -682,6 +792,7 @@ async def annotate(request: AnnotationRequest):
             "success": result.get("success", False),
             "result": result.get("result"),
             "error": result.get("error"),
+            "warning": result.get("warning"),
             "raw_output": result.get("raw_output")
         })
         if not result.get("success", False):
@@ -716,7 +827,8 @@ async def batch_annotate(request: BatchAnnotationRequest):
                 "source": source,
                 "success": result.get("success", False),
                 "result": result.get("result"),
-                "error": result.get("error")
+                "error": result.get("error"),
+                "warning": result.get("warning")
             })
         results.append({
             "input": variant,
