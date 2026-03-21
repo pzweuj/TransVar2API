@@ -3,7 +3,7 @@
 TransVar API Service
 提供 HGVS 变异注释的 RESTful API 服务
 
-版本 1.6.0 - 优化前端界面
+版本 1.6.1 - 修复结果输出显示
 """
 
 import os
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="TransVar API",
     description="HGVS 变异注释工具 TransVar 的 RESTful API 服务",
-    version="1.6.0"
+    version="1.6.1"
 )
 
 # 启用 CORS
@@ -359,10 +359,16 @@ async def home():
                     let out = '';
                     data.results.forEach(r => {
                         out += getDbBadge(r.database) + '\\n';
-                        out += r.success && r.has_data ? r.result : (r.error || '未找到数据');
+                        if (r.result) {
+                            out += r.result;
+                        } else if (r.error) {
+                            out += '错误: ' + r.error;
+                        } else {
+                            out += '未找到数据';
+                        }
                         out += '\\n\\n';
                     });
-                    showResult(data.success, out);
+                    showResult(true, out);
                 } else {
                     showResult(false, data.error || '注释失败');
                 }
@@ -398,7 +404,14 @@ async def home():
                     out += '【' + r.input + '】\\n';
                     r.results?.forEach(sr => {
                         out += getDbBadge(sr.database) + ' ';
-                        out += sr.success && sr.has_data ? sr.result.split('\\n')[1] || sr.result : (sr.error || '无数据');
+                        if (sr.result) {
+                            const lines = sr.result.split('\\n');
+                            out += lines.length > 1 ? lines.slice(1).join('\\n') : sr.result;
+                        } else if (sr.error) {
+                            out += '错误: ' + sr.error;
+                        } else {
+                            out += '无数据';
+                        }
                         out += '\\n';
                     });
                     out += '───\\n';
