@@ -3,7 +3,7 @@
 TransVar API Service
 提供 HGVS 变异注释的 RESTful API 服务
 
-版本 1.6.1 - 修复结果输出显示
+版本 1.6.2 - 修复结果渲染问题
 """
 
 import os
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="TransVar API",
     description="HGVS 变异注释工具 TransVar 的 RESTful API 服务",
-    version="1.6.1"
+    version="1.6.2"
 )
 
 # 启用 CORS
@@ -168,9 +168,8 @@ async def home():
         .example-tag { padding: 6px 14px; background: var(--bg); border: 1px solid var(--border); border-radius: 20px; font-size: 13px; cursor: pointer; transition: all 0.2s; }
         .example-tag:hover { border-color: var(--primary); color: var(--primary); }
         .result { margin-top: 20px; border-radius: 12px; overflow: hidden; display: none; }
-        .result.show { display: block; }
-        .result.success { border: 1px solid #bbf7d0; }
-        .result.error { border: 1px solid #fecaca; }
+        .result.success { display: block; border: 1px solid #bbf7d0; }
+        .result.error { display: block; border: 1px solid #fecaca; }
         .result-header { padding: 12px 16px; font-weight: 600; font-size: 14px; }
         .result.success .result-header { background: #d1fae5; color: #065f46; }
         .result.error .result-header { background: #fee2e2; color: #991b1b; }
@@ -187,7 +186,6 @@ async def home():
         .tab.active { background: white; color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
         .tab:hover:not(.active) { color: var(--text); }
         .loading-overlay { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,0.9); z-index: 1000; align-items: center; justify-content: center; flex-direction: column; }
-        .loading-overlay.show { display: flex; }
         .spinner { width: 48px; height: 48px; border: 4px solid var(--border); border-top-color: var(--primary); border-radius: 50%; animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
         .loading-text { margin-top: 16px; color: var(--text-light); }
@@ -326,8 +324,9 @@ async def home():
 
         function showResult(success, content) {
             const r = document.getElementById('result');
-            r.className = 'result show ' + (success ? 'success' : 'error');
+            r.className = 'result ' + (success ? 'success' : 'error');
             r.innerHTML = '<div class="result-header">' + (success ? '注释结果' : '错误') + '</div><div class="result-body">' + content + '</div>';
+            r.style.display = 'block';
         }
 
         function getDbBadge(db) {
@@ -339,7 +338,7 @@ async def home():
             const variant = document.getElementById('variant').value.trim();
             if (!variant) { showResult(false, '请输入变异描述'); return; }
 
-            document.getElementById('loading').classList.add('show');
+            document.getElementById('loading').style.display = 'flex';
             document.getElementById('result').style.display = 'none';
 
             try {
@@ -360,21 +359,23 @@ async def home():
                     for (let i = 0; i < data.results.length; i++) {
                         const r = data.results[i];
                         out += getDbBadge(r.database) + '\\n';
-                        if (r.success) {
-                            out += r.result || '无输出';
+                        if (r.success && r.has_data) {
+                            out += r.result;
+                        } else if (r.success) {
+                            out += '(未找到匹配数据)\\n' + r.result;
                         } else {
                             out += '错误: ' + (r.error || '注释失败');
                         }
-                        out += '\\n\\n';
+                        out += '\\n\\n' + '─'.repeat(60) + '\\n';
                     }
-                    showResult(true, out);
+                    showResult(data.success, out);
                 } else {
                     showResult(false, data.error || '注释失败');
                 }
             } catch (e) {
                 showResult(false, '请求失败: ' + e.message);
             } finally {
-                document.getElementById('loading').classList.remove('show');
+                document.getElementById('loading').style.display = 'none';
             }
         }
 
@@ -382,7 +383,7 @@ async def home():
             const variants = document.getElementById('batch-variants').value.trim().split('\\n').filter(v => v.trim());
             if (!variants.length) { showResult(false, '请输入变异列表'); return; }
 
-            document.getElementById('loading').classList.add('show');
+            document.getElementById('loading').style.display = 'flex';
             document.getElementById('result').style.display = 'none';
 
             try {
@@ -406,21 +407,24 @@ async def home():
                         for (let j = 0; j < r.results.length; j++) {
                             const sr = r.results[j];
                             out += getDbBadge(sr.database) + ' ';
-                            if (sr.success) {
-                                out += sr.result || '无输出';
+                            if (sr.success && sr.has_data) {
+                                const lines = sr.result.split('\\n');
+                                out += lines.length > 1 ? lines.slice(1).join('\\n') : sr.result;
+                            } else if (sr.success) {
+                                out += '(无数据)';
                             } else {
                                 out += '错误: ' + (sr.error || '失败');
                             }
                             out += '\\n';
                         }
                     }
-                    out += '───\\n';
+                    out += '---\\n';
                 }
                 showResult(true, out);
             } catch (e) {
                 showResult(false, '请求失败: ' + e.message);
             } finally {
-                document.getElementById('loading').classList.remove('show');
+                document.getElementById('loading').style.display = 'none';
             }
         }
     </script>
