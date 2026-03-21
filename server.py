@@ -172,11 +172,15 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
         }
 
     # 构建 TransVar 命令 - 直接指定所有参数
+    # 注意: --refversion 是必需的，使用自定义名称如 hg38_ucsc, hg19_ncbi 等
+    refversion_name = f"{refversion}_{source.replace('ncbi_refseq', 'ncbi')}"
+
     cmd = [
         "transvar", mode,
         "-i", variant,
         db_paths["db_type_flag"], db_paths["annotation"],
         "--reference", db_paths["reference"],
+        "--refversion", refversion_name,
         "-o", "/dev/stdout"
     ]
 
@@ -971,6 +975,7 @@ async def debug_info():
                     "-i", "PIK3CA:p.E545K",
                     "--ucsc", db_paths["annotation"],
                     "--reference", db_paths["reference"],
+                    "--refversion", "hg38_ucsc",
                     "-o", "/dev/stdout"
                 ],
                 capture_output=True, text=True, timeout=60,
