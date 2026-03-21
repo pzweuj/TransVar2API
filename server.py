@@ -355,19 +355,18 @@ async def home():
                 });
                 const data = await res.json();
 
-                if (data.results?.length) {
+                if (data.results && data.results.length > 0) {
                     let out = '';
-                    data.results.forEach(r => {
+                    for (let i = 0; i < data.results.length; i++) {
+                        const r = data.results[i];
                         out += getDbBadge(r.database) + '\\n';
-                        if (r.result) {
-                            out += r.result;
-                        } else if (r.error) {
-                            out += '错误: ' + r.error;
+                        if (r.success) {
+                            out += r.result || '无输出';
                         } else {
-                            out += '未找到数据';
+                            out += '错误: ' + (r.error || '注释失败');
                         }
                         out += '\\n\\n';
-                    });
+                    }
                     showResult(true, out);
                 } else {
                     showResult(false, data.error || '注释失败');
@@ -400,22 +399,23 @@ async def home():
                 const data = await res.json();
 
                 let out = '';
-                data.results.forEach(r => {
+                for (let i = 0; i < data.results.length; i++) {
+                    const r = data.results[i];
                     out += '【' + r.input + '】\\n';
-                    r.results?.forEach(sr => {
-                        out += getDbBadge(sr.database) + ' ';
-                        if (sr.result) {
-                            const lines = sr.result.split('\\n');
-                            out += lines.length > 1 ? lines.slice(1).join('\\n') : sr.result;
-                        } else if (sr.error) {
-                            out += '错误: ' + sr.error;
-                        } else {
-                            out += '无数据';
+                    if (r.results && r.results.length > 0) {
+                        for (let j = 0; j < r.results.length; j++) {
+                            const sr = r.results[j];
+                            out += getDbBadge(sr.database) + ' ';
+                            if (sr.success) {
+                                out += sr.result || '无输出';
+                            } else {
+                                out += '错误: ' + (sr.error || '失败');
+                            }
+                            out += '\\n';
                         }
-                        out += '\\n';
-                    });
+                    }
                     out += '───\\n';
-                });
+                }
                 showResult(true, out);
             } catch (e) {
                 showResult(false, '请求失败: ' + e.message);
