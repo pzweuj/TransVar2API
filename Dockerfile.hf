@@ -38,29 +38,78 @@ RUN python3 /app/scripts/patch_transvar.py
 RUN mkdir -p /data/transvar_db/ucsc_hg38 /data/transvar_db/ucsc_hg19 \
              /data/transvar_db/ncbi_refseq_hg38 /data/transvar_db/ncbi_refseq_hg19
 
-# ========== UCSC 数据库 ==========
+# ========== UCSC hg38 数据库 ==========
 WORKDIR /data/transvar_db/ucsc_hg38
-RUN wget -q -O hg38.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz && \
+RUN echo "Downloading UCSC hg38 reference..." && \
+    wget -q -O hg38.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz && \
     gunzip -f hg38.fa.gz && \
     samtools faidx hg38.fa
-RUN wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/ncbiRefSeq.txt.gz
 
+RUN echo "Downloading UCSC hg38 RefSeq..." && \
+    wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/database/ncbiRefSeq.txt.gz
+
+RUN echo "Building UCSC hg38 transvar index..." && \
+    transvar index --ucsc /data/transvar_db/ucsc_hg38/ncbiRefSeq.txt.gz && \
+    if [ -f ncbiRefSeq.txt.gz.transvardb.gene_idx ] && [ ! -f ncbiRefSeq.txt.gz.gene_idx ]; then \
+        ln -sf ncbiRefSeq.txt.gz.transvardb.gene_idx ncbiRefSeq.txt.gz.gene_idx && \
+        ln -sf ncbiRefSeq.txt.gz.transvardb.trxn_idx ncbiRefSeq.txt.gz.trxn_idx; \
+    fi
+
+# ========== UCSC hg19 数据库 ==========
 WORKDIR /data/transvar_db/ucsc_hg19
-RUN wget -q -O hg19.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz && \
+RUN echo "Downloading UCSC hg19 reference..." && \
+    wget -q -O hg19.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz && \
     gunzip -f hg19.fa.gz && \
     samtools faidx hg19.fa
-RUN wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/ncbiRefSeq.txt.gz
 
-# ========== NCBI RefSeq 数据库 (软链接 UCSC 的参考基因组) ==========
+RUN echo "Downloading UCSC hg19 RefSeq..." && \
+    wget -q -O ncbiRefSeq.txt.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/database/ncbiRefSeq.txt.gz
+
+RUN echo "Building UCSC hg19 transvar index..." && \
+    transvar index --ucsc /data/transvar_db/ucsc_hg19/ncbiRefSeq.txt.gz && \
+    if [ -f ncbiRefSeq.txt.gz.transvardb.gene_idx ] && [ ! -f ncbiRefSeq.txt.gz.gene_idx ]; then \
+        ln -sf ncbiRefSeq.txt.gz.transvardb.gene_idx ncbiRefSeq.txt.gz.gene_idx && \
+        ln -sf ncbiRefSeq.txt.gz.transvardb.trxn_idx ncbiRefSeq.txt.gz.trxn_idx; \
+    fi
+
+# ========== NCBI RefSeq hg38 数据库 ==========
 WORKDIR /data/transvar_db/ncbi_refseq_hg38
-RUN ln -sf ../ucsc_hg38/hg38.fa ./hg38.fa && \
+RUN echo "Creating NCBI hg38 symlinks..." && \
+    ln -sf ../ucsc_hg38/hg38.fa ./hg38.fa && \
     samtools faidx hg38.fa
-RUN wget -q -O hg38_refseq.gff.gz https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_genomic.gff.gz
 
+RUN echo "Downloading NCBI hg38 RefSeq..." && \
+    wget -q -O hg38_refseq.gff.gz https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh38_latest/refseq_identifiers/GRCh38_latest_genomic.gff.gz
+
+RUN echo "Building NCBI hg38 transvar index..." && \
+    transvar index --refseq /data/transvar_db/ncbi_refseq_hg38/hg38_refseq.gff.gz && \
+    if [ -f hg38_refseq.gff.gz.transvardb.gene_idx ] && [ ! -f hg38_refseq.gff.gz.gene_idx ]; then \
+        ln -sf hg38_refseq.gff.gz.transvardb.gene_idx hg38_refseq.gff.gz.gene_idx && \
+        ln -sf hg38_refseq.gff.gz.transvardb.trxn_idx hg38_refseq.gff.gz.trxn_idx; \
+    fi
+
+# ========== NCBI RefSeq hg19 数据库 ==========
 WORKDIR /data/transvar_db/ncbi_refseq_hg19
-RUN ln -sf ../ucsc_hg19/hg19.fa ./hg19.fa && \
+RUN echo "Creating NCBI hg19 symlinks..." && \
+    ln -sf ../ucsc_hg19/hg19.fa ./hg19.fa && \
     samtools faidx hg19.fa
-RUN wget -q -O hg19_refseq.gff.gz https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh37_latest/refseq_identifiers/GRCh37_latest_genomic.gff.gz
+
+RUN echo "Downloading NCBI hg19 RefSeq..." && \
+    wget -q -O hg19_refseq.gff.gz https://ftp.ncbi.nlm.nih.gov/refseq/H_sapiens/annotation/GRCh37_latest/refseq_identifiers/GRCh37_latest_genomic.gff.gz
+
+RUN echo "Building NCBI hg19 transvar index..." && \
+    transvar index --refseq /data/transvar_db/ncbi_refseq_hg19/hg19_refseq.gff.gz && \
+    if [ -f hg19_refseq.gff.gz.transvardb.gene_idx ] && [ ! -f hg19_refseq.gff.gz.gene_idx ]; then \
+        ln -sf hg19_refseq.gff.gz.transvardb.gene_idx hg19_refseq.gff.gz.gene_idx && \
+        ln -sf hg19_refseq.gff.gz.transvardb.trxn_idx hg19_refseq.gff.gz.trxn_idx; \
+    fi
+
+# 验证索引文件
+RUN echo "Verifying index files..." && \
+    ls -la /data/transvar_db/ucsc_hg38/*.transvardb && \
+    ls -la /data/transvar_db/ucsc_hg19/*.transvardb && \
+    ls -la /data/transvar_db/ncbi_refseq_hg38/*.transvardb && \
+    ls -la /data/transvar_db/ncbi_refseq_hg19/*.transvardb
 
 # 设置启动脚本权限
 WORKDIR /app

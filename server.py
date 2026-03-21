@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="TransVar API",
     description="HGVS 变异注释工具 TransVar 的 RESTful API 服务",
-    version="1.1.0"
+    version="1.2.0"
 )
 
 # 启用 CORS
@@ -83,9 +83,46 @@ class DatabaseInfo(BaseModel):
     hg19: Dict[str, Any]
 
 
+def get_db_paths(refversion: str, source: str) -> Dict[str, str]:
+    """
+    获取数据库文件路径
+
+    Args:
+        refversion: 参考基因组版本 (hg38 或 hg19)
+        source: 数据库来源 (ucsc 或 ncbi_refseq)
+
+    Returns:
+        包含 reference 和 annotation 文件路径的字典
+    """
+    if source == "ncbi_refseq":
+        if refversion == "hg38":
+            db_dir = REFSEQ_HG38
+            annotation_file = f"{db_dir}/hg38_refseq.gff.gz"
+        else:  # hg19
+            db_dir = REFSEQ_HG19
+            annotation_file = f"{db_dir}/hg19_refseq.gff.gz"
+        reference_file = f"{db_dir}/{refversion}.fa"
+        db_type_flag = "--refseq"
+    else:  # ucsc
+        if refversion == "hg38":
+            db_dir = UCSC_HG38
+        else:  # hg19
+            db_dir = UCSC_HG19
+        annotation_file = f"{db_dir}/ncbiRefSeq.txt.gz"
+        reference_file = f"{db_dir}/{refversion}.fa"
+        db_type_flag = "--ucsc"
+
+    return {
+        "reference": reference_file,
+        "annotation": annotation_file,
+        "db_type_flag": db_type_flag,
+        "db_dir": db_dir
+    }
+
+
 def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc") -> Dict[str, Any]:
     """
-    执行 TransVar 命令
+    执行 TransVar 命令 - 直接指定所有参数，不依赖配置文件
 
     Args:
         variant: 变异描述
@@ -116,48 +153,38 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             "error": f"无效的数据库来源: {source}，支持的来源: {', '.join(valid_sources)}"
         }
 
-    # 根据 source 和 refversion 确定 transvar 使用的 refversion 名称
-    # 统一命名风格: hg38_ucsc, hg19_ucsc, hg38_ncbi, hg19_ncbi
-    if source == "ncbi_refseq":
-        db_type = "--refseq"
-        if refversion == "hg38":
-            transvar_refversion = "hg38_ncbi"
-            db_path = REFSEQ_HG38
-        elif refversion == "hg19":
-            transvar_refversion = "hg19_ncbi"
-            db_path = REFSEQ_HG19
-        else:
-            logger.error(f"无效的版本: {refversion}")
-            return {"success": False, "error": f"无效的版本: {refversion}"}
-    else:  # ucsc
-        db_type = "--ucsc"
-        if refversion == "hg38":
-            transvar_refversion = "hg38_ucsc"
-            db_path = UCSC_HG38
-        elif refversion == "hg19":
-            transvar_refversion = "hg19_ucsc"
-            db_path = UCSC_HG19
-        else:
-            logger.error(f"无效的版本: {refversion}")
-            return {"success": False, "error": f"无效的版本: {refversion}"}
+    # 获取数据库路径
+    db_paths = get_db_paths(refversion, source)
 
-    logger.info(f"使用 transvar refversion: {transvar_refversion}")
+    # 检查文件是否存在
+    if not os.path.exists(db_paths["reference"]):
+        logger.error(f"参考基因组文件不存在: {db_paths['reference']}")
+        return {
+            "success": False,
+            "error": f"参考基因组文件不存在: {db_paths['reference']}"
+        }
 
-    # 构建 TransVar 命令 - 使用旧版本格式，依赖 transvar config 配置
-    # 不指定文件路径，让 transvar 从配置文件读取
+    if not os.path.exists(db_paths["annotation"]):
+        logger.error(f"注释数据库文件不存在: {db_paths['annotation']}")
+        return {
+            "success": False,
+            "error": f"注释数据库文件不存在: {db_paths['annotation']}"
+        }
+
+    # 构建 TransVar 命令 - 直接指定所有参数
     cmd = [
         "transvar", mode,
         "-i", variant,
-        db_type,
-        "--refversion", transvar_refversion,
+        db_paths["db_type_flag"], db_paths["annotation"],
+        "--reference", db_paths["reference"],
         "-o", "/dev/stdout"
     ]
+
     logger.info(f"执行命令: {' '.join(cmd)}")
 
     try:
         env = {
             **os.environ,
-            "TRANSVAR_DB_PATH": DB_PATH,
             "HOME": os.path.expanduser("~")
         }
         logger.info(f"开始执行 transvar 命令，超时设置为 120 秒")
@@ -165,7 +192,7 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             cmd,
             capture_output=True,
             text=True,
-            timeout=120,  # 增加超时时间到 120 秒
+            timeout=120,
             env=env,
             cwd="/app"
         )
@@ -175,9 +202,9 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
         logger.info(f"命令返回码: {result.returncode}")
         logger.info(f"标准输出长度: {len(output)} 字符")
         if error:
-            logger.warning(f"标准错误: {error[:500]}")  # 只记录前500字符
+            logger.warning(f"标准错误: {error[:500]}")
 
-        if result.returncode == 0 and output:
+        if result.returncode == 0 and output.strip():
             logger.info(f"执行成功")
             return {
                 "success": True,
@@ -186,6 +213,17 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
                 "raw_output": output
             }
         else:
+            # 即使返回码非零，如果有输出也尝试返回
+            if output.strip():
+                logger.warning(f"返回码非零但有输出: returncode={result.returncode}")
+                return {
+                    "success": True,
+                    "source": source,
+                    "result": output.strip(),
+                    "raw_output": output,
+                    "warning": f"返回码: {result.returncode}"
+                }
+
             logger.error(f"执行失败: returncode={result.returncode}")
             return {
                 "success": False,
@@ -667,9 +705,8 @@ async def home():
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
 
-            // 添加请求超时控制
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 150000); // 150秒超时
+            const timeoutId = setTimeout(() => controller.abort(), 150000);
 
             try {
                 const response = await fetch('/api/annotate', {
@@ -792,8 +829,18 @@ async def home():
                 let html = '<h3>调试信息</h3>';
                 html += '<p><strong>服务:</strong> ' + data.service + '</p>';
                 html += '<p><strong>数据库路径:</strong> ' + data.db_path + '</p>';
-                html += '<p><strong>TransVar 可用:</strong> ' + (data.transvar_available ? '是' : '否') + '</p>';
+                html += '<p><strong>Home 目录:</strong> ' + data.home_dir + '</p>';
                 html += '<p><strong>TransVar 版本:</strong> ' + data.transvar_version + '</p>';
+
+                if (data.transvar_config_files) {
+                    html += '<h4 style="margin-top:15px;">配置文件状态</h4>';
+                    html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.transvar_config_files, null, 2) + '</pre>';
+                }
+
+                if (data.transvar_tests) {
+                    html += '<h4 style="margin-top:15px;">TransVar 测试结果</h4>';
+                    html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.transvar_tests, null, 2) + '</pre>';
+                }
 
                 html += '<h4 style="margin-top:15px;">hg38 文件状态</h4>';
                 html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.hg38, null, 2) + '</pre>';
@@ -865,12 +912,86 @@ async def debug_info():
 
         return files_status
 
-    # 测试 transvar 命令是否可用
-    transvar_available = False
+    def check_transvar_config():
+        """检查 transvar 配置文件状态"""
+        home = os.path.expanduser("~")
+        config_paths = [
+            os.path.join(home, ".transvar.cfg"),
+            os.path.join(home, ".transvar", "transvar.cfg"),
+        ]
+
+        transvar_cfg = os.environ.get("TRANSVAR_CFG")
+        if transvar_cfg:
+            config_paths.insert(0, transvar_cfg)
+
+        config_status = {}
+        for path in config_paths:
+            if os.path.exists(path):
+                try:
+                    with open(path, 'r') as f:
+                        content = f.read()
+                    config_status[path] = {
+                        "exists": True,
+                        "size": len(content),
+                        "content_preview": content[:500] if content else "(empty)"
+                    }
+                except Exception as e:
+                    config_status[path] = {"exists": True, "error": str(e)}
+            else:
+                config_status[path] = {"exists": False}
+
+        return config_status
+
+    def test_transvar_command():
+        """测试 transvar 命令是否真正可用"""
+        test_results = {}
+
+        # 测试版本
+        try:
+            result = subprocess.run(
+                ["transvar", "--version"],
+                capture_output=True, text=True, timeout=10
+            )
+            version_info = result.stdout.strip() or result.stderr.strip()
+            test_results["version_check"] = {
+                "returncode": result.returncode,
+                "version": version_info,
+                "note": "exit code 1 is expected for --version"
+            }
+        except Exception as e:
+            test_results["version_check"] = {"error": str(e)}
+            return test_results
+
+        # 测试实际注释 - 使用直接指定参数的方式
+        try:
+            db_paths = get_db_paths("hg38", "ucsc")
+            result = subprocess.run(
+                [
+                    "transvar", "panno",
+                    "-i", "PIK3CA:p.E545K",
+                    "--ucsc", db_paths["annotation"],
+                    "--reference", db_paths["reference"],
+                    "-o", "/dev/stdout"
+                ],
+                capture_output=True, text=True, timeout=60,
+                env={**os.environ, "HOME": os.path.expanduser("~")},
+                cwd="/app"
+            )
+            test_results["annotation_test_hg38_ucsc"] = {
+                "returncode": result.returncode,
+                "stdout_length": len(result.stdout),
+                "stdout_preview": result.stdout[:500] if result.stdout else "",
+                "stderr_preview": result.stderr[:500] if result.stderr else ""
+            }
+        except Exception as e:
+            test_results["annotation_test_hg38_ucsc"] = {"error": str(e)}
+
+        return test_results
+
+    # 检测 transvar 版本
     transvar_version = ""
     try:
         result = subprocess.run(["transvar", "--version"], capture_output=True, text=True, timeout=10)
-        transvar_available = result.returncode == 0
         transvar_version = result.stdout.strip() or result.stderr.strip()
     except Exception as e:
         transvar_version = f"Error: {str(e)}"
@@ -878,8 +999,10 @@ async def debug_info():
     return {
         "service": "TransVar API",
         "db_path": DB_PATH,
-        "transvar_available": transvar_available,
+        "home_dir": os.path.expanduser("~"),
         "transvar_version": transvar_version,
+        "transvar_config_files": check_transvar_config(),
+        "transvar_tests": test_transvar_command(),
         "hg38": check_db_files("hg38"),
         "hg19": check_db_files("hg19")
     }
