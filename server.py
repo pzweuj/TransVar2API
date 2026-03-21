@@ -3,7 +3,7 @@
 TransVar API Service
 提供 HGVS 变异注释的 RESTful API 服务
 
-版本 1.3.0 - 使用配置文件管理数据库
+版本 1.4.0 - 使用 transvar 官方数据库
 """
 
 import os
@@ -17,7 +17,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, Field
 import uvicorn
-import configparser
 
 # 配置日志
 logging.basicConfig(
@@ -29,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="TransVar API",
     description="HGVS 变异注释工具 TransVar 的 RESTful API 服务",
-    version="1.3.0"
+    version="1.4.0"
 )
 
 # 启用 CORS
@@ -41,24 +40,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 数据库路径配置
-DB_PATH = os.getenv("TRANSVAR_DB_PATH", "/data/transvar_db")
-
-# refversion 名称映射: (refversion, source) -> config_section_name
-REFVERSION_MAP = {
-    ("hg38", "ucsc"): "hg38_ucsc",
-    ("hg19", "ucsc"): "hg19_ucsc",
-    ("hg38", "ncbi_refseq"): "hg38_ncbi",
-    ("hg19", "ncbi_refseq"): "hg19_ncbi",
-}
-
 
 class AnnotationRequest(BaseModel):
     """变异注释请求模型"""
     variant: str = Field(..., description="变异描述，如 PIK3CA:p.E545K 或 NM_006218.4:c.1633G>A")
     refversion: str = Field(default="hg38", description="参考基因组版本: hg38 或 hg19")
     mode: str = Field(default="panno", description="注释模式: panno(蛋白), canno(cDNA), ganno(DNA), codonsearch(密码子)")
-    sources: List[str] = Field(default=["ucsc"], description="数据库来源: ucsc 和/或 ncbi_refseq")
 
 
 class AnnotationResponse(BaseModel):
@@ -67,10 +54,9 @@ class AnnotationResponse(BaseModel):
     input: str
     refversion: str
     mode: str
-    sources: List[str] = []
-    results: Optional[List[Dict[str, Any]]] = None
     result: Optional[str] = None
     error: Optional[str] = None
+    warning: Optional[str] = None
     raw_output: Optional[str] = None
 
 
@@ -79,16 +65,9 @@ class BatchAnnotationRequest(BaseModel):
     variants: List[str] = Field(..., description="变异列表")
     refversion: str = Field(default="hg38", description="参考基因组版本")
     mode: str = Field(default="panno", description="注释模式")
-    sources: List[str] = Field(default=["ucsc"], description="数据库来源")
 
 
-def get_refversion_name(refversion: str, source: str) -> str:
-    """获取配置文件中的 refversion 名称"""
-    key = (refversion, source)
-    return REFVERSION_MAP.get(key, f"{refversion}_{source}")
-
-
-def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc") -> Dict[str, Any]:
+def run_transvar(variant: str, mode: str, refversion: str) -> Dict[str, Any]:
     """
     执行 TransVar 命令
 
@@ -96,12 +75,11 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
         variant: 变异描述
         mode: 注释模式 (panno/canno/ganno/codonsearch)
         refversion: 参考基因组版本 (hg38 或 hg19)
-        source: 数据库来源 (ucsc 或 ncbi_refseq)
 
     Returns:
         包含执行结果的字典
     """
-    logger.info(f"开始处理: variant={variant}, mode={mode}, refversion={refversion}, source={source}")
+    logger.info(f"开始处理: variant={variant}, mode={mode}, refversion={refversion}")
 
     # 验证模式
     valid_modes = ["panno", "canno", "ganno", "codonsearch"]
@@ -112,25 +90,20 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             "error": f"无效的模式: {mode}，支持的模式: {', '.join(valid_modes)}"
         }
 
-    # 验证数据库来源
-    valid_sources = ["ucsc", "ncbi_refseq"]
-    if source not in valid_sources:
-        logger.error(f"无效的数据库来源: {source}")
+    # 验证版本
+    valid_versions = ["hg38", "hg19"]
+    if refversion not in valid_versions:
+        logger.error(f"无效的版本: {refversion}")
         return {
             "success": False,
-            "error": f"无效的数据库来源: {source}，支持的来源: {', '.join(valid_sources)}"
+            "error": f"无效的版本: {refversion}，支持的版本: {', '.join(valid_versions)}"
         }
 
-    # 获取 refversion 名称
-    refversion_name = get_refversion_name(refversion, source)
-
     # 构建 TransVar 命令
-    # 使用 --refversion 指定配置文件中的 section
-    # 命令格式: transvar panno -i "PIK3CA:p.E545K" --refversion hg38_ucsc -o /dev/stdout
     cmd = [
         "transvar", mode,
         "-i", variant,
-        "--refversion", refversion_name,
+        "--refversion", refversion,
         "-o", "/dev/stdout"
     ]
 
@@ -141,7 +114,6 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             **os.environ,
             "HOME": os.path.expanduser("~")
         }
-        logger.info(f"开始执行 transvar 命令，超时设置为 120 秒")
         result = subprocess.run(
             cmd,
             capture_output=True,
@@ -151,7 +123,8 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             cwd="/app"
         )
 
-        output = result.stderr
+        output = result.stdout
+        error = result.stderr
         logger.info(f"命令返回码: {result.returncode}")
         logger.info(f"标准输出长度: {len(output)} 字符")
         if error:
@@ -166,25 +139,21 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
                 logger.warning(f"输出只有表头，没有数据行")
                 return {
                     "success": True,
-                    "source": source,
                     "result": output.strip(),
                     "raw_output": output,
-                    "warning": "输出只有表头，未找到匹配的数据。可能原因：基因名不在数据库中或转录本不完整。"
+                    "warning": "输出只有表头，未找到匹配的数据。"
                 }
             logger.info(f"执行成功，输出 {len(output_lines)} 行")
             return {
                 "success": True,
-                "source": source,
                 "result": output.strip(),
                 "raw_output": output
             }
         else:
-            # 即使返回码非零，如果有输出也尝试返回
             if output.strip():
                 logger.warning(f"返回码非零但有输出: returncode={result.returncode}")
                 return {
                     "success": True,
-                    "source": source,
                     "result": output.strip(),
                     "raw_output": output,
                     "warning": f"返回码: {result.returncode}"
@@ -193,7 +162,6 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
             logger.error(f"执行失败: returncode={result.returncode}")
             return {
                 "success": False,
-                "source": source,
                 "error": error.strip() if error else "未找到注释结果",
                 "raw_output": output
             }
@@ -202,14 +170,12 @@ def run_transvar(variant: str, mode: str, refversion: str, source: str = "ucsc")
         logger.error(f"执行超时: variant={variant}")
         return {
             "success": False,
-            "source": source,
-            "error": "执行超时（120秒），请检查变异格式是否正确或稍后重试"
+            "error": "执行超时（120秒），请稍后重试"
         }
     except Exception as e:
         logger.exception(f"执行异常: {str(e)}")
         return {
             "success": False,
-            "source": source,
             "error": f"执行错误: {str(e)}"
         }
 
@@ -254,10 +220,6 @@ async def home():
             transition: border-color 0.3s;
         }
         input:focus, select:focus, textarea:focus { outline: none; border-color: #667eea; }
-        .checkbox-group { display: flex; gap: 20px; margin-top: 8px; }
-        .checkbox-item { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-        .checkbox-item input[type="checkbox"] { width: 18px; height: 18px; cursor: pointer; }
-        .checkbox-item label { margin: 0; cursor: pointer; font-weight: normal; }
         .btn {
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
@@ -270,10 +232,10 @@ async def home():
             transition: transform 0.2s, box-shadow 0.2s;
         }
         .btn:hover { transform: translateY(-2px); box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4); }
-        .btn:disabled { opacity: 0.6; cursor: not-allowed; }
         .result { margin-top: 20px; padding: 20px; border-radius: 8px; display: none; }
         .result.success { background: #d4edda; border: 1px solid #c3e6cb; display: block; }
         .result.error { background: #f8d7da; border: 1px solid #f5c6cb; display: block; }
+        .result.warning { background: #fff3cd; border: 1px solid #ffeeba; display: block; }
         .result-title { font-weight: 600; margin-bottom: 10px; font-size: 1.1em; }
         .result-content {
             font-family: 'Courier New', monospace;
@@ -285,9 +247,6 @@ async def home():
             max-height: 500px;
             overflow-y: auto;
         }
-        .source-label { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-right: 8px; }
-        .source-ucsc { background: #e3f2fd; color: #1565c0; }
-        .source-ncbi { background: #f3e5f5; color: #7b1fa2; }
         .examples { margin-top: 20px; }
         .examples h3 { color: #333; margin-bottom: 15px; }
         .example-item {
@@ -331,7 +290,7 @@ async def home():
     <div class="container">
         <div class="header">
             <h1>TransVar HGVS 注释工具</h1>
-            <p>支持 UCSC RefSeq 和 NCBI RefSeq 数据库进行变异注释</p>
+            <p>使用 TransVar 官方数据库进行变异注释</p>
         </div>
         <div class="card">
             <div class="info-box">
@@ -341,7 +300,7 @@ async def home():
             <div class="tabs">
                 <div class="tab active" onclick="switchTab('single')">单个注释</div>
                 <div class="tab" onclick="switchTab('batch')">批量注释</div>
-                <div class="tab" onclick="switchTab('info')">调试信息</div>
+                <div class="tab" onclick="switchTab('debug')">调试</div>
             </div>
             <div id="single-form">
                 <div class="form-group">
@@ -363,19 +322,6 @@ async def home():
                         <option value="ganno">基因组注释 (g.)</option>
                     </select>
                 </div>
-                <div class="form-group">
-                    <label>数据库来源 (可多选)</label>
-                    <div class="checkbox-group">
-                        <div class="checkbox-item">
-                            <input type="checkbox" id="source-ucsc" value="ucsc" checked>
-                            <label for="source-ucsc">UCSC RefSeq</label>
-                        </div>
-                        <div class="checkbox-item">
-                            <input type="checkbox" id="source-ncbi" value="ncbi_refseq">
-                            <label for="source-ncbi">NCBI RefSeq</label>
-                        </div>
-                    </div>
-                </div>
                 <button class="btn" onclick="annotate()">提交注释</button>
                 <div class="examples">
                     <h3>示例:</h3>
@@ -383,6 +329,7 @@ async def home():
                     <span class="example-item" onclick="setVariant('EGFR:p.L858R')">EGFR:p.L858R</span>
                     <span class="example-item" onclick="setVariant('BRCA1:p.C61G')">BRCA1:p.C61G</span>
                     <span class="example-item" onclick="setVariant('TP53:p.R273H')">TP53:p.R273H</span>
+                    <span class="example-item" onclick="setVariant('NM_006218.4:c.1633G>A')">NM_006218.4:c.1633G>A</span>
                 </div>
             </div>
             <div id="batch-form" style="display:none;">
@@ -405,24 +352,11 @@ async def home():
                         <option value="ganno">基因组注释 (g.)</option>
                     </select>
                 </div>
-                <div class="form-group">
-                    <label>数据库来源 (可多选)</label>
-                    <div class="checkbox-group">
-                        <div class="checkbox-item">
-                            <input type="checkbox" id="batch-source-ucsc" value="ucsc" checked>
-                            <label for="batch-source-ucsc">UCSC RefSeq</label>
-                        </div>
-                        <div class="checkbox-item">
-                            <input type="checkbox" id="batch-source-ncbi" value="ncbi_refseq">
-                            <label for="batch-source-ncbi">NCBI RefSeq</label>
-                        </div>
-                    </div>
-                </div>
                 <button class="btn" onclick="batchAnnotate()">批量提交</button>
             </div>
-            <div id="info-form" style="display:none;">
+            <div id="debug-form" style="display:none;">
                 <button class="btn" onclick="getDebugInfo()">获取调试信息</button>
-                <div id="db-info" style="margin-top:20px;"></div>
+                <div id="debug-info" style="margin-top:20px;"></div>
             </div>
             <div id="result" class="result"></div>
             <div id="loading" class="loading" style="display:none;">
@@ -436,65 +370,35 @@ async def home():
         function switchTab(tab) {
             currentTab = tab;
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab')[['single', 'batch', 'info'].indexOf(tab)].classList.add('active');
+            document.querySelectorAll('.tab')[['single', 'batch', 'debug'].indexOf(tab)].classList.add('active');
             document.getElementById('single-form').style.display = tab === 'single' ? 'block' : 'none';
             document.getElementById('batch-form').style.display = tab === 'batch' ? 'block' : 'none';
-            document.getElementById('info-form').style.display = tab === 'info' ? 'block' : 'none';
+            document.getElementById('debug-form').style.display = tab === 'debug' ? 'block' : 'none';
             document.getElementById('result').style.display = 'none';
         }
         function setVariant(v) { document.getElementById('variant').value = v; }
-        function getSources(prefix) {
-            const sources = [];
-            if (document.getElementById(prefix + '-source-ucsc').checked) sources.push('ucsc');
-            if (document.getElementById(prefix + '-source-ncbi').checked) sources.push('ncbi_refseq');
-            return sources.length > 0 ? sources : ['ucsc'];
-        }
-        function showResult(success, message) {
+        function showResult(success, message, isWarning = false) {
             const resultDiv = document.getElementById('result');
-            resultDiv.className = 'result ' + (success ? 'success' : 'error');
+            resultDiv.className = 'result ' + (isWarning ? 'warning' : (success ? 'success' : 'error'));
             resultDiv.innerHTML = '<div class="result-title">' + (success ? '注释结果' : '错误') + '</div><div class="result-content">' + message + '</div>';
             resultDiv.style.display = 'block';
-        }
-        function formatSourceLabel(source) {
-            const labelClass = source === 'ucsc' ? 'source-ucsc' : 'source-ncbi';
-            const labelName = source === 'ucsc' ? 'UCSC' : 'NCBI';
-            return '<span class="source-label ' + labelClass + '">' + labelName + '</span>';
         }
         async function annotate() {
             const variant = document.getElementById('variant').value.trim();
             if (!variant) { showResult(false, '请输入变异描述'); return; }
             const refversion = document.getElementById('refversion').value;
             const mode = document.getElementById('mode').value;
-            const sources = getSources('');
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
             try {
                 const response = await fetch('/api/annotate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({variant, refversion, mode, sources})
+                    body: JSON.stringify({variant, refversion, mode})
                 });
                 const data = await response.json();
-                let output = '';
-                let hasWarning = false;
-
-                if (data.results) {
-                    data.results.forEach(r => {
-                        output += formatSourceLabel(r.source) + '\\n';
-                        if (r.success) {
-                            output += r.result || '(无输出)';
-                            if (r.warning) {
-                                output += '\\n\\n⚠️ ' + r.warning;
-                                hasWarning = true;
-                            }
-                        } else {
-                            output += '❌ 错误: ' + (r.error || '注释失败');
-                        }
-                        output += '\\n\\n' + '─'.repeat(60) + '\\n\\n';
-                    });
-                    // 如果所有结果都有警告或失败，显示警告颜色
-                    const allHaveWarnings = data.results.every(r => r.warning || !r.success);
-                    showResult(!allHaveWarnings, output);
+                if (data.success) {
+                    showResult(true, data.result || '(无输出)', !!data.warning);
                 } else {
                     showResult(false, data.error || '注释失败');
                 }
@@ -509,32 +413,25 @@ async def home():
             if (!variants.length) { showResult(false, '请输入变异列表'); return; }
             const refversion = document.getElementById('batch-refversion').value;
             const mode = document.getElementById('batch-mode').value;
-            const sources = getSources('batch-');
             document.getElementById('loading').style.display = 'block';
             document.getElementById('result').style.display = 'none';
             try {
                 const response = await fetch('/api/batch_annotate', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({variants, refversion, mode, sources})
+                    body: JSON.stringify({variants, refversion, mode})
                 });
                 const data = await response.json();
                 let output = '';
                 data.results.forEach(r => {
                     output += '输入: ' + r.input + '\\n';
-                    if (r.results) {
-                        r.results.forEach(sr => {
-                            output += formatSourceLabel(sr.source) + ' ';
-                            if (sr.success) {
-                                output += sr.result || '(无输出)';
-                                if (sr.warning) output += ' \\n⚠️ ' + sr.warning;
-                            } else {
-                                output += '❌ 错误: ' + (sr.error || '失败');
-                            }
-                            output += '\\n';
-                        });
+                    if (r.success) {
+                        output += r.result || '(无输出)';
+                        if (r.warning) output += '\\n⚠️ ' + r.warning;
+                    } else {
+                        output += '❌ 错误: ' + (r.error || '失败');
                     }
-                    output += '---\\n';
+                    output += '\\n---\\n';
                 });
                 showResult(true, output);
             } catch (e) {
@@ -547,39 +444,25 @@ async def home():
             try {
                 const response = await fetch('/api/debug');
                 const data = await response.json();
-                let html = '<h3>调试信息</h3>';
-                html += '<p><strong>服务:</strong> ' + data.service + '</p>';
-                html += '<p><strong>数据库路径:</strong> ' + data.db_path + '</p>';
+                let html = '<h4>调试信息</h4>';
                 html += '<p><strong>TransVar 版本:</strong> ' + data.transvar_version + '</p>';
-                if (data.config_content) {
-                    html += '<h4 style="margin-top:15px;">配置文件内容</h4>';
-                    html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + data.config_content + '</pre>';
-                }
-                if (data.db_status) {
-                    html += '<h4 style="margin-top:15px;">数据库状态</h4>';
-                    html += '<pre style="background:#f5f5f5;padding:10px;overflow-x:auto;font-size:12px;">' + JSON.stringify(data.db_status, null, 2) + '</pre>';
+                if (data.config_hg38) {
+                    html += '<h5 style="margin-top:10px;">hg38 配置:</h5>';
+                    html += '<pre style="background:#f5f5f5;padding:10px;font-size:12px;">' + data.config_hg38 + '</pre>';
                 }
                 if (data.test_results) {
-                    html += '<h4 style="margin-top:15px;">测试结果</h4>';
-                    data.test_results.forEach(r => {
-                        html += '<div style="margin-bottom:10px;padding:10px;background:#f9f9f9;border-radius:4px;">';
-                        html += '<strong>' + r.test + '</strong><br>';
-                        html += '<span style="color:' + (r.returncode === 0 ? 'green' : 'red') + ';">Return code: ' + r.returncode + '</span><br>';
-                        if (r.stdout) {
-                            html += '<pre style="margin:5px 0;white-space:pre-wrap;font-size:11px;">' + r.stdout + '</pre>';
-                        }
-                        if (r.stderr) {
-                            html += '<pre style="margin:5px 0;color:orange;font-size:11px;">' + r.stderr + '</pre>';
-                        }
-                        if (r.error) {
-                            html += '<span style="color:red;">Error: ' + r.error + '</span>';
-                        }
+                    html += '<h5 style="margin-top:10px;">测试结果:</h5>';
+                    data.test_results.forEach(t => {
+                        html += '<div style="margin:10px 0;padding:10px;background:#f9f9f9;border-radius:4px;">';
+                        html += '<strong>' + t.test + '</strong><br>';
+                        if (t.stdout) html += '<pre style="margin:5px 0;font-size:11px;">' + t.stdout + '</pre>';
+                        if (t.error) html += '<span style="color:red;">Error: ' + t.error + '</span>';
                         html += '</div>';
                     });
                 }
-                document.getElementById('db-info').innerHTML = html;
+                document.getElementById('debug-info').innerHTML = html;
             } catch (e) {
-                document.getElementById('db-info').innerHTML = '<p style="color:red">获取失败: ' + e.message + '</p>';
+                document.getElementById('debug-info').innerHTML = '<p style="color:red">获取失败: ' + e.message + '</p>';
             }
         }
     </script>
@@ -599,13 +482,6 @@ async def debug_info():
     """调试接口"""
     logger.info("调试接口被调用")
 
-    # 读取配置文件
-    config_content = ""
-    config_path = os.path.expanduser("~/.transvar.cfg")
-    if os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            config_content = f.read()
-
     # 检测 transvar 版本
     transvar_version = ""
     try:
@@ -614,161 +490,59 @@ async def debug_info():
     except Exception as e:
         transvar_version = f"Error: {str(e)}"
 
-    # 检查数据库文件状态
-    db_status = {
-        "ucsc_hg38": {
-            "transvardb_exists": os.path.exists(f"{DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.transvardb"),
-            "reference_exists": os.path.exists(f"{DB_PATH}/ucsc_hg38/hg38.fa"),
-            "fai_exists": os.path.exists(f"{DB_PATH}/ucsc_hg38/hg38.fa.fai"),
-            "gene_idx_exists": os.path.exists(f"{DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.gene_idx"),
-        },
-        "ncbi_hg38": {
-            "transvardb_exists": os.path.exists(f"{DB_PATH}/ncbi_refseq_hg38/hg38_refseq.gff.gz.transvardb"),
-            "reference_exists": os.path.exists(f"{DB_PATH}/ncbi_refseq_hg38/hg38.fa"),
-        }
-    }
+    # 获取配置信息
+    config_hg38 = ""
+    config_hg19 = ""
+    try:
+        result = subprocess.run(["transvar", "config", "--refversion", "hg38"], capture_output=True, text=True, timeout=10)
+        config_hg38 = result.stdout
+    except Exception as e:
+        config_hg38 = f"Error: {str(e)}"
 
-    # 测试注释 - 使用多个测试用例
+    try:
+        result = subprocess.run(["transvar", "config", "--refversion", "hg19"], capture_output=True, text=True, timeout=10)
+        config_hg19 = result.stdout
+    except Exception as e:
+        config_hg19 = f"Error: {str(e)}"
+
+    # 测试
     test_results = []
 
-    # 测试1: PIK3CA:p.E545K
+    # Test 1: PIK3CA
     try:
         result = subprocess.run(
-            ["transvar", "panno", "-i", "PIK3CA:p.E545K", "--refversion", "hg38_ucsc", "-o", "/dev/stdout"],
-            capture_output=True, text=True, timeout=60,
-            env={**os.environ, "HOME": os.path.expanduser("~")},
-            cwd="/app"
+            ["transvar", "panno", "-i", "PIK3CA:p.E545K", "--refversion", "hg38", "-o", "/dev/stdout"],
+            capture_output=True, text=True, timeout=60
         )
         test_results.append({
-            "test": "PIK3CA:p.E545K (hg38_ucsc)",
+            "test": "PIK3CA:p.E545K (hg38)",
             "returncode": result.returncode,
-            "stdout": result.stdout.strip() if result.stdout else "",
+            "stdout": result.stdout.strip()[:500] if result.stdout else "",
             "stderr": result.stderr.strip()[:200] if result.stderr else ""
         })
     except Exception as e:
         test_results.append({"test": "PIK3CA:p.E545K", "error": str(e)})
 
-    # 测试2: 使用转录本ID
+    # Test 2: NM_006218.4
     try:
         result = subprocess.run(
-            ["transvar", "canno", "-i", "NM_006218.4:c.1633G>A", "--refversion", "hg38_ucsc", "-o", "/dev/stdout"],
-            capture_output=True, text=True, timeout=60,
-            env={**os.environ, "HOME": os.path.expanduser("~")},
-            cwd="/app"
+            ["transvar", "canno", "-i", "NM_006218.4:c.1633G>A", "--refversion", "hg38", "-o", "/dev/stdout"],
+            capture_output=True, text=True, timeout=60
         )
         test_results.append({
-            "test": "NM_006218.4:c.1633G>A (hg38_ucsc)",
+            "test": "NM_006218.4:c.1633G>A (hg38)",
             "returncode": result.returncode,
-            "stdout": result.stdout.strip() if result.stdout else "",
+            "stdout": result.stdout.strip()[:500] if result.stdout else "",
             "stderr": result.stderr.strip()[:200] if result.stderr else ""
         })
     except Exception as e:
         test_results.append({"test": "NM_006218.4:c.1633G>A", "error": str(e)})
 
-    # 测试3: EGFR
-    try:
-        result = subprocess.run(
-            ["transvar", "panno", "-i", "EGFR:p.L858R", "--refversion", "hg38_ucsc", "-o", "/dev/stdout"],
-            capture_output=True, text=True, timeout=60,
-            env={**os.environ, "HOME": os.path.expanduser("~")},
-            cwd="/app"
-        )
-        test_results.append({
-            "test": "EGFR:p.L858R (hg38_ucsc)",
-            "returncode": result.returncode,
-            "stdout": result.stdout.strip() if result.stdout else "",
-            "stderr": result.stderr.strip()[:200] if result.stderr else ""
-        })
-    except Exception as e:
-        test_results.append({"test": "EGFR:p.L858R", "error": str(e)})
-
-    # 测试4: 检查数据库中的基因
-    try:
-        # 使用 zgrep 检查 PIK3CA 是否在数据库中
-        result = subprocess.run(
-            ["sh", "-c", f"zgrep -m 5 'PIK3CA' {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz 2>/dev/null || echo 'Not found'"],
-            capture_output=True, text=True, timeout=30
-        )
-        test_results.append({
-            "test": "Check PIK3CA in database",
-            "stdout": result.stdout.strip()[:300] if result.stdout else ""
-        })
-    except Exception as e:
-        test_results.append({"test": "Check PIK3CA in database", "error": str(e)})
-
-    # 测试5: 查看 gene_idx 文件内容
-    try:
-        result = subprocess.run(
-            ["sh", "-c", f"head -20 {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.gene_idx 2>/dev/null || echo 'File not found'"],
-            capture_output=True, text=True, timeout=30
-        )
-        test_results.append({
-            "test": "Check gene_idx file",
-            "stdout": result.stdout.strip()[:500] if result.stdout else ""
-        })
-    except Exception as e:
-        test_results.append({"test": "Check gene_idx file", "error": str(e)})
-
-    # 测试6: 检查 UCSC 源文件中 PIK3CA 的状态
-    try:
-        result = subprocess.run(
-            ["sh", "-c", f"zcat {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz | grep -i 'PIK3CA' | head -5"],
-            capture_output=True, text=True, timeout=30
-        )
-        test_results.append({
-            "test": "Check PIK3CA in source file",
-            "stdout": result.stdout.strip()[:800] if result.stdout else "Not found"
-        })
-    except Exception as e:
-        test_results.append({"test": "Check PIK3CA in source file", "error": str(e)})
-
-    # 测试7: 检查 transvardb 文件内容
-    try:
-        result = subprocess.run(
-            ["sh", "-c", f"head -20 {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.transvardb 2>/dev/null || echo 'File not found'"],
-            capture_output=True, text=True, timeout=30
-        )
-        test_results.append({
-            "test": "Check transvardb content (first 20 lines)",
-            "stdout": result.stdout.strip()[:800] if result.stdout else ""
-        })
-    except Exception as e:
-        test_results.append({"test": "Check transvardb content", "error": str(e)})
-
-    # 测试8: 检查 transvardb 中是否有 PIK3CA
-    try:
-        result = subprocess.run(
-            ["sh", "-c", f"grep -i 'PIK3CA' {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.transvardb 2>/dev/null | head -5 || echo 'Not found'"],
-            capture_output=True, text=True, timeout=30
-        )
-        test_results.append({
-            "test": "Search PIK3CA in transvardb",
-            "stdout": result.stdout.strip()[:500] if result.stdout else "Not found"
-        })
-    except Exception as e:
-        test_results.append({"test": "Search PIK3CA in transvardb", "error": str(e)})
-
-    # 测试9: 统计 transvardb 中的基因数量
-    try:
-        result = subprocess.run(
-            ["sh", "-c", f"cut -f1 {DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.transvardb 2>/dev/null | sort -u | wc -l"],
-            capture_output=True, text=True, timeout=30
-        )
-        test_results.append({
-            "test": "Count unique genes in transvardb",
-            "stdout": result.stdout.strip() if result.stdout else ""
-        })
-    except Exception as e:
-        test_results.append({"test": "Count genes in transvardb", "error": str(e)})
-
     return {
         "service": "TransVar API",
-        "db_path": DB_PATH,
         "transvar_version": transvar_version,
-        "config_path": config_path,
-        "config_exists": os.path.exists(config_path),
-        "config_content": config_content,
-        "db_status": db_status,
+        "config_hg38": config_hg38,
+        "config_hg19": config_hg19,
         "test_results": test_results
     }
 
@@ -776,86 +550,41 @@ async def debug_info():
 @app.post("/api/annotate", response_model=AnnotationResponse)
 async def annotate(request: AnnotationRequest):
     """单个变异注释接口"""
-    logger.info(f"收到注释请求: variant={request.variant}, refversion={request.refversion}, mode={request.mode}, sources={request.sources}")
+    logger.info(f"收到注释请求: variant={request.variant}, refversion={request.refversion}, mode={request.mode}")
 
-    sources = request.sources if request.sources else ["ucsc"]
-    results = []
-    all_success = True
-    merged_result = ""
+    result = run_transvar(request.variant, request.mode, request.refversion)
 
-    for source in sources:
-        logger.info(f"处理数据源: {source}")
-        result = run_transvar(request.variant, request.mode, request.refversion, source)
-        logger.info(f"数据源 {source} 处理完成: success={result.get('success', False)}")
-        results.append({
-            "source": source,
-            "success": result.get("success", False),
-            "result": result.get("result"),
-            "error": result.get("error"),
-            "warning": result.get("warning"),
-            "raw_output": result.get("raw_output")
-        })
-        if not result.get("success", False):
-            all_success = False
-        if result.get("result"):
-            merged_result += f"[{source}]\n{result['result']}\n\n"
-
-    logger.info(f"注释请求完成: all_success={all_success}")
     return AnnotationResponse(
-        success=all_success or len([r for r in results if r["success"]]) > 0,
+        success=result.get("success", False),
         input=request.variant,
         refversion=request.refversion,
         mode=request.mode,
-        sources=sources,
-        results=results,
-        result=merged_result.strip() if merged_result else None,
-        error=None if all_success else "部分数据库注释失败"
+        result=result.get("result"),
+        error=result.get("error"),
+        warning=result.get("warning"),
+        raw_output=result.get("raw_output")
     )
 
 
 @app.post("/api/batch_annotate")
 async def batch_annotate(request: BatchAnnotationRequest):
     """批量变异注释接口"""
-    sources = request.sources if request.sources else ["ucsc"]
     results = []
 
     for variant in request.variants:
-        variant_results = []
-        for source in sources:
-            result = run_transvar(variant.strip(), request.mode, request.refversion, source)
-            variant_results.append({
-                "source": source,
-                "success": result.get("success", False),
-                "result": result.get("result"),
-                "error": result.get("error"),
-                "warning": result.get("warning")
-            })
+        result = run_transvar(variant.strip(), request.mode, request.refversion)
         results.append({
             "input": variant,
-            "success": any(r["success"] for r in variant_results),
-            "results": variant_results
+            "success": result.get("success", False),
+            "result": result.get("result"),
+            "error": result.get("error"),
+            "warning": result.get("warning")
         })
 
     return {
         "success": True,
         "total": len(results),
-        "sources": sources,
         "results": results
-    }
-
-
-@app.get("/api/db_info")
-async def get_db_info():
-    """获取数据库信息"""
-    return {
-        "hg38": {
-            "ucsc_available": os.path.exists(f"{DB_PATH}/ucsc_hg38/ncbiRefSeq.txt.gz.transvardb"),
-            "ncbi_available": os.path.exists(f"{DB_PATH}/ncbi_refseq_hg38/hg38_refseq.gff.gz.transvardb")
-        },
-        "hg19": {
-            "ucsc_available": os.path.exists(f"{DB_PATH}/ucsc_hg19/ncbiRefSeq.txt.gz.transvardb"),
-            "ncbi_available": os.path.exists(f"{DB_PATH}/ncbi_refseq_hg19/hg19_refseq.gff.gz.transvardb")
-        }
     }
 
 
