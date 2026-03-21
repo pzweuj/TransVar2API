@@ -44,6 +44,8 @@ app.add_middleware(
 SUPPORTED_DATABASES = {
     "refseq": {"flag": "--refseq", "name": "RefSeq"},
     "ensembl": {"flag": "--ensembl", "name": "Ensembl"},
+    "gencode": {"flag": "--gencode", "name": "GENCODE"},
+    "ucsc": {"flag": "--ucsc", "name": "UCSC RefGene"},
     "ccds": {"flag": "--ccds", "name": "CCDS"},
 }
 
@@ -191,6 +193,8 @@ async def home():
         .db-label { display: inline-block; padding: 2px 10px; border-radius: 4px; font-size: 12px; font-weight: bold; margin-bottom: 8px; }
         .db-refseq { background: #e3f2fd; color: #1565c0; }
         .db-ensembl { background: #e8f5e9; color: #2e7d32; }
+        .db-gencode { background: #fce4ec; color: #c2185b; }
+        .db-ucsc { background: #f3e5f5; color: #7b1fa2; }
         .db-ccds { background: #fff3e0; color: #e65100; }
         .examples { margin-top: 20px; }
         .examples h3 { color: #333; margin-bottom: 15px; }
@@ -240,16 +244,24 @@ async def home():
                     <label>数据库 (可多选)</label>
                     <div class="checkbox-group" id="db-checkboxes">
                         <div class="checkbox-item selected" onclick="toggleDb(this, 'refseq')">
-                            <input type="checkbox" id="db-refseq" checked onchange="updateDbStyle(this)">
-                            <label for="db-refseq">RefSeq</label>
+                            <input type="checkbox" id="db-refseq" checked>
+                            <label>RefSeq</label>
                         </div>
                         <div class="checkbox-item" onclick="toggleDb(this, 'ensembl')">
-                            <input type="checkbox" id="db-ensembl" onchange="updateDbStyle(this)">
-                            <label for="db-ensembl">Ensembl</label>
+                            <input type="checkbox" id="db-ensembl">
+                            <label>Ensembl</label>
+                        </div>
+                        <div class="checkbox-item" onclick="toggleDb(this, 'gencode')">
+                            <input type="checkbox" id="db-gencode">
+                            <label>GENCODE</label>
+                        </div>
+                        <div class="checkbox-item" onclick="toggleDb(this, 'ucsc')">
+                            <input type="checkbox" id="db-ucsc">
+                            <label>UCSC RefGene</label>
                         </div>
                         <div class="checkbox-item" onclick="toggleDb(this, 'ccds')">
-                            <input type="checkbox" id="db-ccds" onchange="updateDbStyle(this)">
-                            <label for="db-ccds">CCDS</label>
+                            <input type="checkbox" id="db-ccds">
+                            <label>CCDS</label>
                         </div>
                     </div>
                 </div>
@@ -293,6 +305,14 @@ async def home():
                             <input type="checkbox" id="batch-db-ensembl">
                             <label>Ensembl</label>
                         </div>
+                        <div class="checkbox-item" onclick="toggleDb(this, 'gencode')">
+                            <input type="checkbox" id="batch-db-gencode">
+                            <label>GENCODE</label>
+                        </div>
+                        <div class="checkbox-item" onclick="toggleDb(this, 'ucsc')">
+                            <input type="checkbox" id="batch-db-ucsc">
+                            <label>UCSC RefGene</label>
+                        </div>
                         <div class="checkbox-item" onclick="toggleDb(this, 'ccds')">
                             <input type="checkbox" id="batch-db-ccds">
                             <label>CCDS</label>
@@ -326,9 +346,12 @@ async def home():
         }
         function getDatabases(prefix) {
             const dbs = [];
-            if (document.getElementById((prefix ? prefix + '-' : '') + 'db-refseq')?.checked) dbs.push('refseq');
-            if (document.getElementById((prefix ? prefix + '-' : '') + 'db-ensembl')?.checked) dbs.push('ensembl');
-            if (document.getElementById((prefix ? prefix + '-' : '') + 'db-ccds')?.checked) dbs.push('ccds');
+            const p = prefix ? prefix + '-' : '';
+            if (document.getElementById(p + 'db-refseq')?.checked) dbs.push('refseq');
+            if (document.getElementById(p + 'db-ensembl')?.checked) dbs.push('ensembl');
+            if (document.getElementById(p + 'db-gencode')?.checked) dbs.push('gencode');
+            if (document.getElementById(p + 'db-ucsc')?.checked) dbs.push('ucsc');
+            if (document.getElementById(p + 'db-ccds')?.checked) dbs.push('ccds');
             return dbs.length > 0 ? dbs : ['refseq'];
         }
         function showResult(success, message) {
@@ -338,7 +361,7 @@ async def home():
             r.style.display = 'block';
         }
         function getDbLabel(db) {
-            const labels = {refseq: 'RefSeq', ensembl: 'Ensembl', ccds: 'CCDS'};
+            const labels = {refseq: 'RefSeq', ensembl: 'Ensembl', gencode: 'GENCODE', ucsc: 'UCSC', ccds: 'CCDS'};
             return '<span class="db-label db-' + db + '">' + labels[db] + '</span>';
         }
         async function annotate() {
