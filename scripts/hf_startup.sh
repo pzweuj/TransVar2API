@@ -14,16 +14,16 @@ transvar config --refversion hg19
 # 测试 transvar
 echo ""
 echo "[Step 2] Testing transvar annotation..."
-echo "Test 1: PIK3CA:p.E545K (hg38)"
-transvar panno -i "PIK3CA:p.E545K" --refversion hg38 -o /dev/stdout 2>&1
+echo "Test 1: PIK3CA:p.E545K (refseq, hg38)"
+transvar panno -i "PIK3CA:p.E545K" --refseq --refversion hg38 -o /dev/stdout 2>&1
 
 echo ""
-echo "Test 2: NM_006218.4:c.1633G>A (hg38)"
-transvar canno -i "NM_006218.4:c.1633G>A" --refversion hg38 -o /dev/stdout 2>&1
+echo "Test 2: PIK3CA:p.E545K (ensembl, hg38)"
+transvar panno -i "PIK3CA:p.E545K" --ensembl --refversion hg38 -o /dev/stdout 2>&1
 
 echo ""
-echo "Test 3: EGFR:p.L858R (hg38)"
-transvar panno -i "EGFR:p.L858R" --refversion hg38 -o /dev/stdout 2>&1
+echo "Test 3: NM_006218.4:c.1633G>A (refseq, hg38)"
+transvar canno -i "NM_006218.4:c.1633G>A" --refseq --refversion hg38 -o /dev/stdout 2>&1
 
 # Start server
 echo ""

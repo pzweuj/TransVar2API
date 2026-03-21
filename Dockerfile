@@ -30,23 +30,37 @@ RUN git clone https://github.com/pzweuj/TransVar2API.git .
 RUN pip3 install --no-cache-dir -r requirements.txt
 RUN pip3 install --no-cache-dir transvar
 
-# 修补 transvar 的 localdb.py 以修复 KeyError: 'product' 错误
-RUN python3 /app/scripts/patch_transvar.py
+# ========== 创建数据目录 ==========
+RUN mkdir -p /data/hg38 /data/hg19
 
-# ========== 下载 transvar 官方数据库 ==========
-# hg38 - 下载注释数据库和参考基因组
+# ========== 下载参考基因组 ==========
+# hg38
+WORKDIR /data/hg38
+RUN echo "Downloading hg38 reference genome..." && \
+    wget -q -O hg38.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg38/bigZips/hg38.fa.gz && \
+    gunzip hg38.fa.gz && \
+    samtools faidx hg38.fa
+
+# hg19
+WORKDIR /data/hg19
+RUN echo "Downloading hg19 reference genome..." && \
+    wget -q -O hg19.fa.gz https://hgdownload.soe.ucsc.edu/goldenPath/hg19/bigZips/hg19.fa.gz && \
+    gunzip hg19.fa.gz && \
+    samtools faidx hg19.fa
+
+# ========== 配置 transvar reference ==========
+RUN echo "Configuring hg38 reference..." && \
+    transvar config -k reference -v /data/hg38/hg38.fa --refversion hg38
+
+RUN echo "Configuring hg19 reference..." && \
+    transvar config -k reference -v /data/hg19/hg19.fa --refversion hg19
+
+# ========== 下载注释数据库 ==========
 RUN echo "Downloading hg38 annotation database..." && \
     transvar config --download_anno --refversion hg38
 
-RUN echo "Downloading hg38 reference genome..." && \
-    transvar config --download_ref --refversion hg38
-
-# hg19 - 下载注释数据库和参考基因组
 RUN echo "Downloading hg19 annotation database..." && \
     transvar config --download_anno --refversion hg19
-
-RUN echo "Downloading hg19 reference genome..." && \
-    transvar config --download_ref --refversion hg19
 
 # 验证数据库
 RUN echo "Verifying databases..." && \
@@ -55,9 +69,9 @@ RUN echo "Verifying databases..." && \
 
 # 测试 transvar
 RUN echo "Testing transvar..." && \
-    transvar panno -i "PIK3CA:p.E545K" --refversion hg38 -o /dev/stdout
+    transvar panno -i "PIK3CA:p.E545K" --refseq --refversion hg38 -o /dev/stdout
 
-# 设置启动脚本权限
+WORKDIR /app
 RUN chmod +x /app/scripts/hf_startup.sh
 
 EXPOSE 7860
